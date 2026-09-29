@@ -3,12 +3,12 @@ project:
   title:        "AgilA32"      # Project title
   author:       "Alexander Co Abad"      # Your name
   discord:      "alexandercoabad_25756"      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "A from-scratch RV32I CPU plus RP2040-compatible PIO state machines: firmware-programmable protocol emulator (UART/SPI/... loaded after fabrication)."
+  description:  "A minimal from-scratch RV32I CPU, inspired by the discrete-logic Pineapple ONE RISC-V computer, reimplemented as synthesizable Verilog for a single Tiny Tapeout tile."
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     1000000       # 1 MHz -- conservative starting point; matches CLOCK_PERIOD in src/config.json (1000 ns). Raise both together once you've confirmed timing closure.
 
   # How many tiles your design occupies? A single IHP tile is roughly 200x150 uM.
-  tiles: "6x4"          # Jane Street protocol-emulator ASIC competition: 6x4 tiles. (CPU alone was ~0.174 mm2 / ~10 tiles; the 2-SM PIO block roughly doubles generic-gate count -- re-run the real flow to confirm fit.)
+  tiles: "6x2"          # Synthesis estimate: ~0.174 mm2 cell area (~10 tiles at 60% density). Valid values: 1x1, 1x2, 2x2, 3x2, 4x2, 6x2 or 8x2
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_agila32"
@@ -21,40 +21,37 @@ project:
     - "rv32i_core.v"
     - "mem.v"
     - "qspi_shared_engine.v"
-    - "pio.v"
-    - "pio_sm.v"
-    - "pio_fifo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "SW0 / PIO pin 0 in"
-  ui[1]: "SW1 / PIO pin 1 in"
-  ui[2]: "SW2 / PIO pin 2 in"
-  ui[3]: "SW3 / PIO pin 3 in"
-  ui[4]: "SW4 / PIO pin 4 in"
-  ui[5]: "SW5 / PIO pin 5 in"
-  ui[6]: "SW6 / PIO pin 6 in"
-  ui[7]: "SW7 / PIO pin 7 in"
+  ui[0]: "SW0"
+  ui[1]: "SW1"
+  ui[2]: "SW2"
+  ui[3]: "SW3"
+  ui[4]: "SW4"
+  ui[5]: "SW5"
+  ui[6]: "SW6"
+  ui[7]: "SW7"
 
   # Outputs
-  uo[0]: "LED0 / PIO pin 0"
-  uo[1]: "LED1 / PIO pin 1"
-  uo[2]: "LED2 / PIO pin 2"
-  uo[3]: "LED3 / PIO pin 3"
-  uo[4]: "LED4 / PIO pin 4"
-  uo[5]: "LED5 / PIO pin 5"
-  uo[6]: "LED6 / PIO pin 6"
-  uo[7]: "LED7 / PWM / halted (PIN_MUX, 0xFA) / PIO pin 7"
+  uo[0]: "LED0"
+  uo[1]: "LED1"
+  uo[2]: "LED2"
+  uo[3]: "LED3"
+  uo[4]: "LED4"
+  uo[5]: "LED5"
+  uo[6]: "LED6"
+  uo[7]: "LED7 / PWM (selected by PIN_MUX, 0xFA)"
 
   # Bidirectional pins
   uio[0]: "qspi_cs0"
   uio[1]: "qspi_mosi"
   uio[2]: "qspi_miso"
   uio[3]: "qspi_sck"
-  uio[4]: "PIO pin 8 (open-drain capable; held high until owned)"
-  uio[5]: "PIO pin 9 (open-drain capable; held high until owned)"
+  uio[4]: ""
+  uio[5]: ""
   uio[6]: "qspi_cs1"
   uio[7]: "qspi_cs2"
 
