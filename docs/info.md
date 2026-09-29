@@ -693,3 +693,53 @@ room to spare in the standard RV32I encoding, so `EBREAK` (opcode
 trigger instead -- close to EBREAK's usual "stop and hand control to a
 debugger" role in real RISC-V, just without an actual debugger on the
 other end. `tools/asm_pineapple.py`'s `Asm.EBREAK()` emits it.
+
+#### PIO -- firmware-defined protocol engines (UART / SPI / ...)
+
+AgilA32 carries a **PIO block**: two state machines that execute the
+RP2040 PIO instruction set (JMP WAIT IN OUT PUSH/PULL MOV IRQ SET, with
+side-set, per-instruction delay, autopush/autopull, IRQ flags, and a
+16.8 fractional clock divider), one shared 32-word instruction memory,
+and a 4-deep TX and RX FIFO per state machine. Each state machine
+executes one instruction per divided-clock tick with deterministic,
+cycle-exact timing, so a protocol is *a short program loaded after
+fabrication* -- nothing about UART, SPI, etc. is hard-wired. Programs
+written for the RP2040 (Pico SDK `uart_tx`, `uart_rx_mini`, `spi_cpha0`
+...) run unmodified when they stay on pins 0-9 (`pio/` holds three of
+them; `tools/pioasm.py` assembles the stock `pioasm` syntax).
+
+**Bus interface.** The core's 8-bit address space was full, so PIO uses
+two bytes: `PIO_IDX` (`0xFF`, bits[6:0] = register index, bit 7 =
+auto-increment) and `PIO_DATA` (`0xFE`, a full 32-bit word to the
+selected register). With auto-increment a whole program streams into
+instruction memory with back-to-back stores. The register map is in the
+header of `src/pio.v` (CTRL, IRQ, FSTAT, PIN_OWN, SYNC_BYP, PINS_IN,
+PINS_OUT, INFO, IMEM 0x20-0x3F, and per-SM CLKDIV/EXECCTRL/SHIFTCTRL/
+PINCTRL/INSTR/ADDR/TXF/RXF/FLEVEL at `0x40 + 0x10*n`).
+
+**Pins.** PIO pins 0-7 = `uo_out[0..7]` (inputs read `ui_in[0..7]`);
+pins 8-9 = `uio[4]`, `uio[5]` (true bidirectional, PINDIR is the real
+output enable, so open-drain buses such as I2C are possible). A pin is
+taken from the LED/QSPI logic only when its `PIN_OWN` bit is set, so
+reset behaviour and every earlier feature are unchanged. Inputs pass a
+2-flop synchroniser (per-pin bypass in `SYNC_BYP`; needed for fast SPI
+MISO, exactly as on the RP2040).
+
+**Host tooling.** `tools/pio_host.py` turns "load this PIO program,
+configure the SM, start it" into a paged flash image (each PIO register
+write costs several RV32I instructions and the on-chip execute window
+is only 11 instructions). `tools/build_pio_uart.py` builds the demo:
+the CPU loads `uart_tx`, starts SM0 at 128 clk/bit, queues `"Agil"`,
+then executes `EBREAK` -- the core halts and **the PIO keeps
+transmitting**.
+
+**Known behaviour to be aware of.** A host-forced `OUT EXEC` / `MOV EXEC`
+on a *disabled* state machine leaves the produced instruction pending; it
+runs in place of the next program fetch once the SM is enabled.
+
+**Tests.** `tb_pio_isa.v` (directed semantics of every instruction),
+`tb_pio_uart.v` (SDK UART TX+RX loopback, cycle-exact 8N1 waveform,
+framing-error IRQ, fractional divider), `tb_pio_spi.v` (SDK SPI master,
+SCK period, SYNC_BYP behaviour), and `tb_pio_cpu_uart.v` (end-to-end:
+real CPU + flash image + PIO in the real top level, CPU halted while the
+last byte is still on the wire).

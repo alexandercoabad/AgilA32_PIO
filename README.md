@@ -156,7 +156,15 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       tiles, 53.8% routing utilization, 12,548 cells (excluding
       fill/tap), clean DRC/precheck (15/15 checks) and gate-level tests
       (11/11) -- see `.github/workflows/gds.yaml` run history
-- [x] Sixteen test suites (see "Testing locally" below): on-chip
+- [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
+      machines + shared 32-word instruction memory + FIFOs at
+      `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
+      `uio[5:4]`). UART TX/RX and SPI master run as unmodified Pico SDK
+      programs (`pio/`), assembled by `tools/pioasm.py`, loaded by
+      `tools/pio_host.py` -- see docs/info.md's "PIO" section and
+      `CHANGES_feature6.md`. Built for the Jane Street protocol-emulator
+      ASIC competition (6x4 tiles).
+- [x] Twenty test suites (see "Testing locally" below): on-chip
       cocotb regression (self-test, demo counter, full bootload-and-run)
       plus fifteen standalone Icarus testbenches -- QSPI engine
       bit-level protocol, external-window integration via direct bus
@@ -195,7 +203,10 @@ src/
   boot_rom_body.vh        generated boot ROM bytes, `include`d by mem.v -- don't hand-edit
   qspi_shared_engine.v    single-line SPI master shared between flash (CS0) and PSRAM (CS1)
   tt_um_agila32.v   Tiny Tapeout top-level pin mapping (incl. QSPI Pmod pins on uio)
+  pio.v, pio_sm.v, pio_fifo.v   PIO block: host registers/pins/IRQs, one state machine, FIFO
   config.json             LibreLane flow config (clock period, density, etc.)
+pio/
+  uart_tx.pio, uart_rx.pio, spi_master.pio   Pico SDK programs, used unmodified
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you
@@ -209,6 +220,7 @@ tools/
   build_st7789_flash_image.py  real ST7789 LCD driver, PagedAsm-based, bank-switched
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
+  pioasm.py, pio_host.py, build_pio_uart.py   PIO assembler/disassembler, flash-image host library, UART demo
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
@@ -225,6 +237,7 @@ test/
   tb_ps2_ascii.v          standalone: PS/2 frames -> translated ASCII on GPIO_OUT (Step 2)
   tb_qspi_clkdiv.v        standalone: QSPI_CTRL clock-divider timing, engine-level and through mem.v
   tb_spi_periph.v         standalone: generic SPI peripheral (SPI_DATA, CS2), engine-level and through mem.v
+  tb_pio_isa.v, tb_pio_uart.v, tb_pio_spi.v, tb_pio_cpu_uart.v   PIO block tests (see docs/info.md)
   alu_test_mem.v          minimal flat ROM+RAM harness (not mem.v) used only by tb_alu_test.v
   tb_alu_test.v           standalone: every asm_pineapple.py opcode, run through the real core, checked
                           against hand-computed register values

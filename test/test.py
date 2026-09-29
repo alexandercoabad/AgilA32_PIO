@@ -416,7 +416,7 @@ async def test_flash_cs_never_asserted(dut):
 
 @cocotb.test()
 async def test_uio_oe_is_constant(dut):
-    """uio_oe should remain constant at 0b1111_1011."""
+    """uio_oe should remain constant at 0b1111_1011 (until a program claims uio[4]/[5] for PIO via PIN_OWN)."""
     clock = Clock(dut.clk, 10, unit="us")
     cocotb.start_soon(clock.start())
 
