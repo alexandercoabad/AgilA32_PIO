@@ -187,6 +187,19 @@ class PioHost:
             self.write_idx(sm_reg(sm, SM_TXF))
             self.write_data(w)
 
+    def delay(self, clocks):
+        """Busy-wait for AT LEAST `clocks` core clocks (a 2-instruction countdown loop, at least
+        ~14 clk per iteration, so iterations = clocks // 10 always over-waits). One atomic op."""
+        n = max(1, clocks // 10)
+        self._reserve(self._li_bytes(n) + 8)
+        self._li(self.TMP, n)
+        self._delay_n = getattr(self, "_delay_n", 0) + 1
+        lbl = "dly%d" % self._delay_n
+        a = self.p.page
+        a.label(lbl)
+        a.ADDI(self.TMP, self.TMP, -1)
+        a.BNE(self.TMP, 0, lbl)
+
     def write_gpio_out(self, reg, addr=0xF0):
         """SB reg -> LED_OUT (0xF0)."""
         self._reserve(4)
