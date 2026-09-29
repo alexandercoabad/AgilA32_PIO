@@ -1,0 +1,10 @@
+; UART transmitter -- Raspberry Pi Pico SDK `uart_tx`, unmodified.
+; 8N1, LSB first. One bit = 8 PIO ticks; baud = clk / (8 * CLKDIV).
+.program uart_tx
+.side_set 1 opt
+
+    pull       side 1 [7]   ; assert stop bit / idle, wait for data
+    set x, 7   side 0 [7]   ; start bit, preload bit counter
+bitloop:
+    out pins, 1             ; shift 1 data bit (LSB first)
+    jmp x-- bitloop   [6]

@@ -1,0 +1,7 @@
+; SPI master, mode 0 (CPOL=0, CPHA=0) -- Pico SDK `spi_cpha0`.
+; OUT pin = MOSI, side-set pin = SCK, IN pin = MISO. SCK = clk / (4 * CLKDIV).
+.program spi_cpha0
+.side_set 1
+
+    out pins, 1 side 0 [1]  ; present MOSI while SCK low
+    in  pins, 1 side 1 [1]  ; SCK high; sample MISO

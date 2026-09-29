@@ -1,0 +1,15 @@
+; UART receiver -- Raspberry Pi Pico SDK `uart_rx_mini`, unmodified.
+; 8N1, LSB first. IN_BASE / JMP_PIN = RX pin. Framing error -> IRQ 4 rel.
+.program uart_rx_mini
+start:
+    wait 0 pin 0        ; stall until start bit
+    set x, 7    [10]    ; preload bit counter, delay to middle of first data bit
+bitloop:
+    in pins, 1          ; sample a data bit
+    jmp x-- bitloop [6] ; 8 ticks per bit
+    jmp pin good_stop   ; stop bit must be high
+    irq 4 rel           ; framing error / break: sticky flag
+    wait 1 pin 0        ; wait for the line to go idle again
+    jmp start
+good_stop:
+    push                ; hand the byte to the RX FIFO
