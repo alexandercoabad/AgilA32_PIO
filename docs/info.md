@@ -766,3 +766,14 @@ before the STOP; PIO generates it alone. `test/tb_pio_cpu_i2c.v` checks this end
 open-drain bus with a behavioural slave at 0x50 (all bytes ACKed, one START, one STOP).
 Note the CPU costs about 3000 clk per queued word (flash paging), so the bus must be slower than
 that per byte for the CPU to get ahead of it.
+
+**One image, three protocols (the reprogrammability demo).** `tools/build_pio_multi.py` builds a
+single flash image whose firmware reprograms the *same* PIO state machine at run time: UART TX
+("Agil", pin 0), then SPI mode 0 (0xA5 0x3C, MOSI = pin 0, SCK = pin 1), then I2C (write C3 96 to
+0x50, `uio[4]`/`uio[5]`), and finally `EBREAK` while PIO completes the I2C STOP alone. Between
+phases the state machine is disabled and restarted (`CTRL` = restart | clkdiv-restart | FIFO-clear),
+instruction memory is overwritten, and pins, shifting and clock divider are reconfigured. The CPU
+sits in a busy loop (`PioHost.delay`) for each protocol to finish. `test/tb_pio_cpu_multi.v`
+checks all three waveforms against a UART receiver, an SPI slave and an I2C slave, and that the
+phases ran strictly one after the other. Hand-over is glitch-free: UART idles high before it
+owns the pad, SCK is preset low before SPI owns it, and the I2C pins are handed over released.
