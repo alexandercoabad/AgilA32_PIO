@@ -220,7 +220,7 @@ tools/
   build_st7789_flash_image.py  real ST7789 LCD driver, PagedAsm-based, bank-switched
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
-  pioasm.py, pio_host.py, build_pio_uart.py   PIO assembler/disassembler, flash-image host library, UART demo
+  pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py   PIO assembler/disassembler, flash-image host library, UART demo
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
@@ -237,7 +237,7 @@ test/
   tb_ps2_ascii.v          standalone: PS/2 frames -> translated ASCII on GPIO_OUT (Step 2)
   tb_qspi_clkdiv.v        standalone: QSPI_CTRL clock-divider timing, engine-level and through mem.v
   tb_spi_periph.v         standalone: generic SPI peripheral (SPI_DATA, CS2), engine-level and through mem.v
-  tb_pio_isa.v, tb_pio_uart.v, tb_pio_spi.v, tb_pio_cpu_uart.v   PIO block tests (see docs/info.md)
+  tb_pio_isa.v, tb_pio_uart.v, tb_pio_spi.v, tb_pio_cpu_uart.v, tb_pio_cpu_i2c.v, test_pio_protocols.py   PIO block tests (see docs/info.md)
   alu_test_mem.v          minimal flat ROM+RAM harness (not mem.v) used only by tb_alu_test.v
   tb_alu_test.v           standalone: every asm_pineapple.py opcode, run through the real core, checked
                           against hand-computed register values

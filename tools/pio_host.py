@@ -163,6 +163,30 @@ class PioHost:
         for w in words:
             self.write_data(w)
 
+    def wait_tx_ready(self, sm):
+        """Spin until TX FIFO `sm` has room (FSTAT.TXFULL[sm] == 0).  One atomic page op:
+        select FSTAT, then  LUI mask ; L: LW/AND/BNE L.  Leaves PIO_IDX pointing at FSTAT."""
+        nbytes = self._li_bytes(R_FSTAT) + 4 + 4 * 4
+        self._reserve(nbytes)
+        self._li(self.TMP, R_FSTAT)
+        a = self.p.page
+        a.SW(self.TMP, 0, PIO_IDX)
+        self._wait_n = getattr(self, "_wait_n", 0) + 1
+        lbl = "txw%d" % self._wait_n
+        a.LUI(6, 1 << (16 + sm - 12))                # mask = 1 << (16 + sm)
+        a.label(lbl)
+        a.LW(7, 0, PIO_DATA)
+        a.AND(7, 7, 6)
+        a.BNE(7, 0, lbl)
+
+    def tx_push_paced(self, sm, *words):
+        """Like tx_push, but waits for FIFO room before every word (the CPU can outrun a slow
+        state machine; the 4-deep TX FIFO silently drops writes when full)."""
+        for w in words:
+            self.wait_tx_ready(sm)
+            self.write_idx(sm_reg(sm, SM_TXF))
+            self.write_data(w)
+
     def write_gpio_out(self, reg, addr=0xF0):
         """SB reg -> LED_OUT (0xF0)."""
         self._reserve(4)

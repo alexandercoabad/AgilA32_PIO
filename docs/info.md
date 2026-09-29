@@ -757,3 +757,12 @@ flagging any SDA change while SCL is high.
 `tools/pio_i2c.py` complements the pindir bits it sends (data, ACK slot, START/STOP).
 One bit is 32 PIO ticks, so SCL = clk / (32 * CLKDIV). `tools/sta.py` is a quick
 pre-layout register-to-register timing estimate from a Yosys JSON netlist and a liberty file.
+
+**CPU-driven I2C demo.** `tools/build_pio_i2c.py` builds a flash image in which the CPU loads
+`pio/i2c.pio`, starts SM0 (SDA = `uio[4]`, SCL = `uio[5]`, CLKDIV 32 = 1024 clk per SCL period),
+queues START / `0x50<<1|W` / `0xA5` / `0x3C` / STOP through the 4-deep TX FIFO (every push first
+spins on `FSTAT.TXFULL`, `PioHost.tx_push_paced`), then executes `EBREAK`. The core is parked
+before the STOP; PIO generates it alone. `test/tb_pio_cpu_i2c.v` checks this end to end against an
+open-drain bus with a behavioural slave at 0x50 (all bytes ACKed, one START, one STOP).
+Note the CPU costs about 3000 clk per queued word (flash paging), so the bus must be slower than
+that per byte for the CPU to get ahead of it.
