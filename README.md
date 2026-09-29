@@ -159,7 +159,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
-      `uio[5:4]`). UART TX/RX and SPI master run as unmodified Pico SDK
+      `uio[5:4]`). UART TX/RX, SPI master (modes 0/1) and I2C master run as Pico SDK
       programs (`pio/`), assembled by `tools/pioasm.py`, loaded by
       `tools/pio_host.py` -- see docs/info.md's "PIO" section and
       `CHANGES_feature6.md`. Built for the Jane Street protocol-emulator
@@ -206,7 +206,7 @@ src/
   pio.v, pio_sm.v, pio_fifo.v   PIO block: host registers/pins/IRQs, one state machine, FIFO
   config.json             LibreLane flow config (clock period, density, etc.)
 pio/
-  uart_tx.pio, uart_rx.pio, spi_master.pio   Pico SDK programs, used unmodified
+  uart_tx.pio, uart_rx.pio, spi_master.pio, spi_cpha1.pio, i2c.pio   Pico SDK programs (i2c: side-set polarity swapped)
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you

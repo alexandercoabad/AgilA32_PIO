@@ -250,6 +250,9 @@ def _encode(line, prog, sym):
         return word(0, (JMP_COND[cond] << 5) | tgt)
 
     if mn == "wait":
+        # the Pico SDK writes `wait 1 pin, 1` (comma after the source); accept both spellings
+        args = [t for t in args if t != ","]
+        low = [t.lower() for t in args]
         need(2)
         pol = _eval(args[0], sym, "polarity")
         if pol not in (0, 1):

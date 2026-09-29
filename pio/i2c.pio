@@ -1,0 +1,46 @@
+; I2C master -- Pico SDK pico-examples/pio/i2c/i2c.pio, with the side-set polarity swapped
+; (see POLARITY NOTE); instruction sequence, delays and encoding are otherwise identical.
+;
+; TX word (16 bits, sent as a replicated halfword): [15:10] instr count n, [9] final,
+;                                                    [8:1] data, [0] NAK
+;   n > 0 : no data; the next n+1 words are PIO instructions (start / stop / repeated start)
+;   n = 0 : 8 data bits then the ACK slot are shifted out
+; Pins: SDA = OUT/SET/IN/JMP pin, SCL = SDA+1 = side-set pin (pindirs).
+; Autopull 16 (shift left), autopush 8 (shift left).
+;
+; POLARITY NOTE: the SDK assumes the pad output-enable is INVERTED (pindir = 1 releases the
+; line). AgilA32 drives the pad enable straight from PINDIR (pindir = 1 pulls the line low).
+; So (1) every `side` value below is the complement of the SDK's (SCL rise = `side 0`,
+; SCL fall = `side 1`) and (2) the host complements every pindir bit it sends: data, the ACK
+; slot, and the start/stop `set pindirs` words (tools/pio_i2c.py).
+.program i2c
+.side_set 1 opt pindirs
+
+do_nack:
+    jmp y-- entry_point        ; Continue if NAK was expected
+    irq wait 0 rel             ; Otherwise stop, ask for help
+do_byte:
+    set x, 7                   ; Loop 8 times
+bitloop:
+    out pindirs, 1         [7] ; Serialise write data (all-ones if reading)
+    nop             side 0 [2] ; SCL rising edge
+    wait 1 pin, 1          [4] ; Allow clock to be stretched
+    in pins, 1             [7] ; Sample read data in middle of SCL pulse
+    jmp x-- bitloop side 1 [7] ; SCL falling edge
+
+    ; Handle ACK pulse
+    out pindirs, 1         [7] ; On reads, we provide the ACK.
+    nop             side 0 [7] ; SCL rising edge
+    wait 1 pin, 1          [7] ; Allow clock to be stretched
+    jmp pin do_nack side 1 [2] ; Test SDA for ACK/NACK, fall through if ACK
+
+public entry_point:
+.wrap_target
+    out x, 6                   ; Unpack Instr count
+    out y, 1                   ; Unpack the NAK ignore bit
+    jmp !x do_byte             ; Instr == 0, this is a data record.
+    out null, 32               ; Instr > 0, remainder of this OSR is invalid
+do_exec:
+    out exec, 16               ; Execute one instruction per FIFO word
+    jmp x-- do_exec            ; Repeat n + 1 times
+.wrap

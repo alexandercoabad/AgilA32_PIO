@@ -743,3 +743,17 @@ framing-error IRQ, fractional divider), `tb_pio_spi.v` (SDK SPI master,
 SCK period, SYNC_BYP behaviour), and `tb_pio_cpu_uart.v` (end-to-end:
 real CPU + flash image + PIO in the real top level, CPU halted while the
 last byte is still on the wire).
+
+**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 16 cocotb
+tests drive `pio.v` over the same bus the CPU uses, against cycle-accurate peer models
+(`test/pio_tb_lib.py`): register/FIFO behaviour; UART TX at integer, fractional and
+averaged dividers, UART RX incl. framing error and baud tolerance, two-SM UART loopback;
+SPI master modes 0 and 1 (plus fast SCK with `SYNC_BYP`); and I2C write, read,
+repeated-start register read, NAK -> IRQ 0, and clock stretching, with the slave model
+flagging any SDA change while SCL is high.
+
+**I2C polarity.** The Pico SDK I2C program assumes an *inverted* pad output-enable. Here
+`PINDIR = 1` pulls the pad low, so `pio/i2c.pio` has its `side` values swapped and
+`tools/pio_i2c.py` complements the pindir bits it sends (data, ACK slot, START/STOP).
+One bit is 32 PIO ticks, so SCL = clk / (32 * CLKDIV). `tools/sta.py` is a quick
+pre-layout register-to-register timing estimate from a Yosys JSON netlist and a liberty file.
