@@ -110,37 +110,108 @@ module pio_sm #(
     // ------------------------------------------------------------------
     // Helper functions
     // ------------------------------------------------------------------
-    function [15:0] rotl16;
+    // NOTE: none of these helpers use the Verilog `<<` / `>>` operators with a
+    // variable amount. Those become $shl/$shr cells, and Yosys' SAT-based
+    // `share` pass then tries to prove pairs of them mergeable against very
+    // large control cones -- on this block that took (effectively) forever in
+    // CI. Fixed-stage mux shifters (constant-distance slices selected by one
+    // amount bit each) are the same barrel-shifter hardware, but leave the
+    // `share` pass nothing to analyse.
+
+    function [15:0] rotl16;             // rotate left by n
         input [15:0] v;
         input [3:0]  n;
-        reg   [31:0] t;
+        reg   [15:0] t;
         begin
-            t = {v, v} << n;
-            rotl16 = t[31:16];
+            t = v;
+            if (n[0]) t = {t[14:0], t[15]};
+            if (n[1]) t = {t[13:0], t[15:14]};
+            if (n[2]) t = {t[11:0], t[15:12]};
+            if (n[3]) t = {t[7:0],  t[15:8]};
+            rotl16 = t;
         end
     endfunction
 
-    function [15:0] rotr16;
+    function [15:0] rotr16;             // rotate right by n
         input [15:0] v;
         input [3:0]  n;
-        reg   [31:0] t;
+        reg   [15:0] t;
         begin
-            t = {v, v} >> n;
-            rotr16 = t[15:0];
+            t = v;
+            if (n[0]) t = {t[0],   t[15:1]};
+            if (n[1]) t = {t[1:0], t[15:2]};
+            if (n[2]) t = {t[3:0], t[15:4]};
+            if (n[3]) t = {t[7:0], t[15:8]};
+            rotr16 = t;
         end
     endfunction
 
-    function [15:0] cmask16;            // (1<<n)-1 for n in 0..15
+    function [15:0] cmask16;            // low n bits set, n in 0..15
         input [3:0] n;
+        integer b;
         begin
-            cmask16 = (16'd1 << n) - 16'd1;
+            for (b = 0; b < 16; b = b + 1) cmask16[b] = (b < n);
         end
     endfunction
 
-    function [31:0] cmask32;            // low n bits set, n in 1..32
+    function [31:0] cmask32;            // low n bits set, n in 0..32
         input [5:0] n;
+        integer b;
         begin
-            cmask32 = (n >= 6'd32) ? 32'hFFFF_FFFF : ((32'd1 << n) - 32'd1);
+            for (b = 0; b < 32; b = b + 1) cmask32[b] = (b < n);
+        end
+    endfunction
+
+    function [4:0] cmask5;              // low n bits set, n in 0..5
+        input [2:0] n;
+        integer b;
+        begin
+            for (b = 0; b < 5; b = b + 1) cmask5[b] = (b < n);
+        end
+    endfunction
+
+    function [4:0] shr5;                // logical right shift, n in 0..7
+        input [4:0] v;
+        input [2:0] n;
+        reg   [4:0] t;
+        begin
+            t = v;
+            if (n[0]) t = {1'b0, t[4:1]};
+            if (n[1]) t = {2'b0, t[4:2]};
+            if (n[2]) t = {4'b0, t[4:4]};
+            shr5 = t;
+        end
+    endfunction
+
+    function [31:0] shr32;              // logical right shift, n in 0..32
+        input [31:0] v;
+        input [5:0]  n;
+        reg   [31:0] t;
+        begin
+            t = v;
+            if (n[0]) t = {1'b0,  t[31:1]};
+            if (n[1]) t = {2'b0,  t[31:2]};
+            if (n[2]) t = {4'b0,  t[31:4]};
+            if (n[3]) t = {8'b0,  t[31:8]};
+            if (n[4]) t = {16'b0, t[31:16]};
+            if (n[5]) t = 32'h0;
+            shr32 = t;
+        end
+    endfunction
+
+    function [31:0] shl32;              // logical left shift, n in 0..32
+        input [31:0] v;
+        input [5:0]  n;
+        reg   [31:0] t;
+        begin
+            t = v;
+            if (n[0]) t = {t[30:0], 1'b0};
+            if (n[1]) t = {t[29:0], 2'b0};
+            if (n[2]) t = {t[27:0], 4'b0};
+            if (n[3]) t = {t[23:0], 8'b0};
+            if (n[4]) t = {t[15:0], 16'b0};
+            if (n[5]) t = 32'h0;
+            shl32 = t;
         end
     endfunction
 
@@ -197,12 +268,12 @@ module pio_sm #(
     // ------------------------------------------------------------------
     wire [2:0] sc       = (side_count > 3'd5) ? 3'd5 : side_count;
     wire [2:0] dly_bits = 3'd5 - sc;
-    wire [4:0] dly_mask = (5'd1 << dly_bits) - 5'd1;
+    wire [4:0] dly_mask = cmask5(dly_bits);
     wire [4:0] dly_val  = dlyf & dly_mask;
-    wire [4:0] side_fld = dlyf >> dly_bits;                 // sc bits wide
+    wire [4:0] side_fld = shr5(dlyf, dly_bits);                // sc bits wide
     wire [2:0] val_bits = (side_en && sc != 3'd0) ? (sc - 3'd1) : sc;
     wire       side_on  = (sc != 3'd0) && (!side_en || side_fld[val_bits]);
-    wire [4:0] side_dat = side_fld & ((5'd1 << val_bits) - 5'd1);
+    wire [4:0] side_dat = side_fld & cmask5(val_bits);
     wire [15:0] s_mask  = rotl16(cmask16({1'b0, val_bits}), side_base);
     wire [15:0] s_val   = rotl16({11'b0, side_dat}, side_base) & s_mask;
 
@@ -324,8 +395,8 @@ module pio_sm #(
                 end
             end else begin
                 dat = srcv & cmask32(cnt);
-                n_isr = in_shiftdir ? ((isr >> cnt) | (dat << (6'd32 - cnt)))
-                                    : ((isr << cnt) | dat);
+                n_isr = in_shiftdir ? (shr32(isr, cnt) | shl32(dat, 6'd32 - cnt))
+                                    : (shl32(isr, cnt) | dat);
                 sum = {1'b0, isr_cnt} + {1'b0, cnt};
                 n_isr_cnt = (sum > 7'd32) ? 6'd32 : sum[5:0];
                 if (autopush && n_isr_cnt >= push_thr) begin
@@ -351,8 +422,8 @@ module pio_sm #(
             end
             if (!stall) begin
                 dat = out_shiftdir ? (osr_use & cmask32(cnt))
-                                   : (osr_use >> (6'd32 - cnt));
-                n_osr = out_shiftdir ? (osr_use >> cnt) : (osr_use << cnt);
+                                   : shr32(osr_use, 6'd32 - cnt);
+                n_osr = out_shiftdir ? shr32(osr_use, cnt) : shl32(osr_use, cnt);
                 sum = {1'b0, osr_cnt_use} + {1'b0, cnt};
                 n_osr_cnt = (sum > 7'd32) ? 6'd32 : sum[5:0];
                 if (autopull && !refilled && n_osr_cnt >= pull_thr && !tx_empty) begin

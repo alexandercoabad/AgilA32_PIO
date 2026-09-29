@@ -26,3 +26,15 @@ are *programs* loaded after fabrication instead of fixed logic.
 
 ## Config
 - `info.yaml`: source files, pinout, `tiles: "6x4"` (contest size).
+
+## Synthesis fix: Yosys `share` pass stalled in CI
+The LibreLane/Yosys log sat in "Analyzing resource sharing ... activation_patterns"
+(the SAT-based `share` pass) on the variable-amount `<<` / `>>` operators in
+`pio_sm.v` (pin-mask rotates, OUT/IN shifts). `pio_sm.v` now has **no** variable
+`<<`/`>>`: rotates, masks and 32-bit shifts are fixed-stage mux shifters
+(`rotl16`, `rotr16`, `cmask*`, `shr5`, `shr32`, `shl32`). Behaviour is unchanged:
+all PIO testbenches (ISA, UART, SPI, end-to-end CPU) and the 11 cocotb tests pass.
+Locally the `share` pass on the full design dropped from 145 to 5 analyses
+(28 s -> 6 s). Only the CPU's own three ALU shifters remain (as in the
+pre-PIO design). Rough generic-gate count moved 34.2k -> 35.0k (+2%): this fix
+is for synthesis time, not area.
