@@ -65,6 +65,8 @@ module tt_um_agila32 (
     wire [31:0] pio_rdata;
     wire        pio_sel;
     wire [9:0]  pio_pin_out, pio_pin_dir, pio_pin_own;
+    // Only pins 8/9 (uio4/uio5) have an output-enable; dir[7:0] is unused here.
+    wire _unused_pio_dir = &{1'b0, pio_pin_dir[7:0]};
 
     rv32i_core u_core (
         .clk       (clk),

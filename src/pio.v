@@ -136,6 +136,8 @@ module pio #(
     // ------------------------------------------------------------------
     reg [3:0] sm_en;
     reg [3:0] restart_q, clkdiv_restart_q, fifo_clear_q;
+    // Bits [3:2] are only consumed when N_SM > 2 (default N_SM = 2).
+    wire _unused_hi_ctrl = &{1'b0, restart_q[3:2], clkdiv_restart_q[3:2], fifo_clear_q[3:2]};
     reg [9:0] own_q, bypass_q;
     reg [7:0] irq_q;
 
@@ -469,7 +471,7 @@ module pio #(
     always @(*) begin
         sm_rd_sel = 32'h0;
         for (c = 0; c < N_SM; c = c + 1)
-            if (idx[5:4] == c) sm_rd_sel = sm_rdata_v[c*32 +: 32];
+            if (idx[5:4] == c[1:0]) sm_rd_sel = sm_rdata_v[c*32 +: 32];
     end
 
     always @(*) begin
