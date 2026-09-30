@@ -2,6 +2,11 @@
 
 # AgilA32 — a from-scratch RV32I CPU for Tiny Tapeout (IHP SG13CMOS5L shuttle)
 
+> **In one line:** a from-scratch RV32I CPU with RP2040-compatible PIO state
+> machines on the same die, so the CPU can load, *and later replace*, the
+> protocol engines at run time -- and can then halt itself while the PIO
+> keeps running the protocol on its own.
+
 Originally inspired by [Pineapple ONE](https://pineapple-one.github.io/),
 a RISC-V CPU built entirely out of discrete 7400-series logic chips (no
 FPGA, no microcontroller) -- the "just basic logic" idea of a minimal,
@@ -52,12 +57,97 @@ gives. A bit-banged SPI LCD driver (ST7789) now runs over that same
 Pmod's GPIO, and a PS/2 keyboard reader is next to it feeding the same
 external address space — see "Status" below.
 
+## What is novel here (Jane Street protocol-emulator competition)
+
+The brief asks for a chip that supports new protocols *after* fabrication,
+and to say what the architecture makes possible beyond the RP2040's PIO.
+Here is what this design does, with the test that backs each claim.
+
+**1. The programmer lives on the die.** RP2040 PIO is driven by an external
+Cortex-M0+. Here a from-scratch RV32I core drives the PIO over a two-byte
+window (`PIO_IDX`/`PIO_DATA`, with auto-increment) squeezed into an 8-bit
+address space. No host microcontroller is needed: a flash image or the GPIO
+bootloader is enough to bring the whole system up.
+(`tools/pio_host.py`, docs/info.md "PIO")
+
+**2. One state machine, three protocols, one image.** `tools/build_pio_multi.py`
+builds a single flash image whose firmware reprograms the *same* PIO state
+machine at run time: UART TX, then SPI mode 0, then I2C. Between phases it
+disables and restarts the SM, overwrites instruction memory, and
+reconfigures pins, shifting and clock divider. Pin hand-over is glitch-free
+(UART idles high before it owns the pad, SCK is preset low, I2C pins are
+handed over released). This is the "support new protocols after fabrication"
+requirement demonstrated, not just claimed.
+(`test/tb_pio_cpu_multi.v` checks all three waveforms against a UART
+receiver, an SPI slave and an I2C slave, and that the phases ran strictly in
+sequence.)
+
+**3. The CPU can leave; the protocol keeps going.** After queueing its last
+word, the firmware executes `EBREAK`, which parks the core. The PIO finishes
+the transfer alone -- in the I2C demo it generates the STOP condition with the
+CPU halted. Protocol timing is therefore independent of firmware timing, and
+the CPU can be halted for power or debugging without corrupting a transfer.
+(`test/tb_pio_cpu_uart.v`, `test/tb_pio_cpu_i2c.v`)
+
+**4. Stock Pico SDK programs run unmodified.** The PIO executes the RP2040
+instruction set (JMP WAIT IN OUT PUSH/PULL MOV IRQ SET, side-set, delays,
+autopush/autopull, IRQ flags, 16.8 fractional divider). Pico SDK `uart_tx`,
+`uart_rx_mini` and `spi_cpha0` run as-is on pins 0-9, and `tools/pioasm.py`
+assembles stock `pioasm` syntax, so existing PIO programs are a starting
+point rather than something to rewrite.
+
+**5. Open-drain buses on a real bidirectional pad.** Pins 8-9 (`uio[4]`,
+`uio[5]`) use `PINDIR` as the true output enable, which is what makes I2C
+possible. The polarity differs from the RP2040 (`PINDIR = 1` pulls the pad
+low), so `pio/i2c.pio` has its side-set values swapped and
+`tools/pio_i2c.py` complements the pindir bits it sends. Pins are only taken
+from the LED/QSPI logic when their `PIN_OWN` bit is set, so reset behaviour
+is identical to the pre-PIO chip and every earlier test still passes
+unchanged.
+
+**6. Verification against protocol peers, not just waveforms.**
+- 16 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+  Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
+  cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
+  fractional and averaged dividers, UART RX including framing error and baud
+  tolerance, two-SM UART loopback, SPI master modes 0 and 1 (plus fast SCK
+  with `SYNC_BYP`), and I2C write, read, repeated-start register read, NAK
+  raising IRQ 0, and clock stretching.
+- The I2C slave model flags any SDA change while SCL is high, so START/STOP
+  conditions are checked as protocol events, not just as edges.
+- `tb_pio_isa.v` checks the semantics of every PIO instruction. While
+  building it, three WAIT encodings in the supplied testbench turned out to
+  have the wrong source field; they are fixed and documented in
+  `CHANGES_feature6.md`.
+- Gate-level tests run on the hardened netlist in CI (11/11 passing).
+
+**7. Designed for the synthesis flow, not just for simulation.** The first
+CI synthesis of the PIO block stalled in Yosys' SAT-based `share` pass on the
+variable-amount `<<`/`>>` operators in `pio_sm.v`. `pio_sm.v` now contains no
+variable shifts: rotates, masks and 32-bit shifts are fixed-stage mux
+shifters, with behaviour unchanged (all PIO testbenches still pass). The
+`share` pass dropped from 145 analyses to 5 locally (28 s to 6 s) for about
++2% generic gates. `tools/sta.py` gives a quick pre-layout register-to-
+register timing estimate from a Yosys JSON netlist and a liberty file.
+
+**Honest limits.** Two state machines (the RP2040 has eight), a shared
+32-word instruction memory, pins 0-9 only, and a 1 MHz clock in `info.yaml`.
+The CPU costs about 3000 clock cycles per queued word (flash paging), so a
+bus must be slower than that per byte for firmware to stay ahead of it -- the
+FIFOs and the halt-and-continue behaviour above are how this is worked
+around. UART, SPI (modes 0/1) and I2C master are demonstrated. Low-speed USB
+and 10BASE-T (the brief's stretch goals) are not attempted here, and nothing
+has been measured on silicon yet.
+
 ## Layout
 
-<img width="1305" height="297" alt="Screenshot 2026-09-09 at 7 54 46 PM" src="https://github.com/user-attachments/assets/6945c66d-a44e-43ee-a7ae-b8bbbedcb1e7" />
+<img width="909" height="507" alt="Screenshot 2026-09-30 at 9 55 39 AM" src="https://github.com/user-attachments/assets/d88ef3de-51db-43f4-a758-97518fc3055b" />
 
 
-https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/AgilA32/tinytapeout.oas&pdk=ihp-sg13cmos5l
+
+https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/AgilA32_PIO/tinytapeout.oas&pdk=ihp-sg13g2
+<img width="468" height="218" alt="image" src="https://github.com/user-attachments/assets/11bdc999-53e0-40fe-96be-b69c5ff4937a" />
+
 
 
 
@@ -156,6 +246,10 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       tiles, 53.8% routing utilization, 12,548 cells (excluding
       fill/tap), clean DRC/precheck (15/15 checks) and gate-level tests
       (11/11) -- see `.github/workflows/gds.yaml` run history
+- [x] **Hardened on the IHP CMOS5L flow (current target)** at 6x4 tiles with
+      the PIO block: 51.45% routing utilization, 34,053 cells (excluding
+      fill/tap), clean lint, precheck 10/10 and gate-level tests 11/11
+      (CI run #11, ~2h28m for the `gds` job -- expect a long build)
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
