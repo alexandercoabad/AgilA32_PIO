@@ -14,7 +14,7 @@ from-scratch RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make` in `test/`): **19 cocotb protocol tests**
+**Test counts** (all run by `make` in `test/`): **26 cocotb protocol tests**
 (`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 8 PIO Verilog
 testbenches**: 5 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
 `tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`) and 3 that
@@ -30,7 +30,8 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 | JTAG master (IEEE 1149.1 TAP walk), CPU-driven | PIO (`jtag`) | Done | `tb_pio_cpu_jtag.v` (CPU resets the TAP, reads the 32-bit IDCODE, loads IR = USER, writes the 16-bit USER register with the IDCODE bits it just read, reads it back; a pins-only TAP model checks every state, scan lengths 32/4/16/16, exactly 95 TCK pulses, TDI/TMS setup and hold, and that the CPU halts only after the last pulse) |
 | UART -> SPI -> I2C on one state machine | PIO, reprogrammed by CPU at run time | Done | `tb_pio_cpu_multi.v` (all three waveforms, strictly in sequence) |
 | I2C slave / multi-master | PIO | Not yet | -- |
-| PS/2 keyboard | CPU bit-bang (not PIO) | Done | `tb_ps2_reader.v`, `tb_ps2_ascii.v` |
+| PS/2 keyboard, CPU bit-bang | CPU firmware over flash pages (not PIO) | Works only against a slowed-down keyboard | `tb_ps2_reader.v`, `tb_ps2_ascii.v` (the testbench holds each CLOCK level for 4000 clocks; a real keyboard's is 30-50 us, and one flash page switch costs about 3000 clocks -- see `docs/info.md`) |
+| PS/2 keyboard receiver | PIO (`ps2_rx`, own state machine) | Done at the `pio.v` level (not yet CPU-driven end to end) | 7 cocotb tests against a PS/2 keyboard model: keystroke traffic incl. extended keys, 10 and 16.7 kHz CLOCK, 4-frame FIFO burst while the CPU is busy, FIFO overflow + recovery, idle-timeout resync after a partial frame, bad parity / stop bit reported to the CPU, and running next to an SPI master on another state machine |
 | SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
 | SWD, CAN | PIO | Not attempted | -- |
 | Low-speed USB, 10BASE-T (brief's stretch goals) | PIO | Not attempted | -- |
@@ -143,13 +144,19 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 19 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 26 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
   tolerance, two-SM UART loopback, SPI master modes 0-3 (plus fast SCK
   with `SYNC_BYP`), and I2C write, read, repeated-start register read, NAK
   raising IRQ 0, and clock stretching.
+- `pio/ps2_rx.pio` (8 instructions) receives PS/2 frames on its own state machine, so the
+  CPU no longer has to watch CLOCK edges: 7 cocotb tests check keystroke traffic at real
+  10 kHz and 16.7 kHz clock rates, a 4-frame burst held in the RX FIFO while nobody reads it, an
+  overflow that preserves the oldest four frames and recovers, an idle-gap timeout that drops a
+  partial frame (removing it, or shortening it to 36 clocks, makes the tests fail), and SPI
+  streaming on SM0 at the same time (every one of 1536 SCK edges fell inside PS/2 frames).
 - SPI modes 2 and 3 idle SCK high without a pad-inversion override (the Pico SDK
   uses one; this block has none) by inverting the side-set values. The SPI slave
   model measures MOSI setup/hold, because a model that samples in the same cycle
@@ -315,13 +322,22 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all wired into CI, all gating the
       build, all 11 cocotb tests + all 23 standalone tests (15 CPU and
-      peripheral, 8 PIO) + the 19 PIO protocol cocotb tests currently
+      peripheral, 8 PIO) + the 26 PIO protocol cocotb tests currently
       passing
-- [ ] **Step 3, in progress:** a bitmap font + terminal renderer tying
-      the PS/2 reader to the ST7789 driver, so keystrokes actually
-      appear on screen -- the biggest piece yet; no interrupts on this
-      core, so keyboard polling and display draws have to be
-      interleaved cooperatively by the same program, not preempted
+- [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
+      tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
+      screen. The first plan -- interleave the polled PS/2 reader and the
+      bit-banged display driver in one program -- cannot work: this core has
+      no interrupts, one flash page switch costs about 3000 clocks, a real
+      PS/2 CLOCK edge arrives every 30-50 us (30-50 core clocks at 1 MHz), and
+      the current ST7789 fill spends about 17 pages per pixel. The plan now
+      moves both time-critical jobs into the PIO. **Done (simulation only):**
+      PS/2 reception on its own state machine (`pio/ps2_rx.pio`; the 4-deep RX
+      FIFO holds frames while the CPU is busy). **Still open:** wiring the
+      receiver into a CPU-driven top-level demo, a PIO glyph expander (1-bit
+      font rows -> RGB565 pixels over SPI), the font, scancode-to-ASCII in
+      the terminal loop, and the renderer itself. Nothing here has run on a
+      real keyboard or display.
 - [ ] Validate the external memory path against a real flash/PSRAM chip
       or a vendor-accurate behavioral model (currently only tested
       against a hand-written behavioral model, `test/spi_ram_model.v`)
@@ -343,6 +359,7 @@ src/
   config.json             LibreLane flow config (clock period, density, etc.)
 pio/
   uart_tx.pio, uart_rx.pio, spi_master.pio, spi_cpha1.pio, spi_cpol1_cpha0.pio, spi_cpol1_cpha1.pio, i2c.pio   Pico SDK programs (i2c: side-set polarity swapped)
+  ps2_rx.pio              PS/2 receiver (own program: 11-bit frames, idle-gap resync)
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you

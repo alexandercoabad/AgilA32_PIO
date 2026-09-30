@@ -1,0 +1,39 @@
+; PS/2 device-to-host receiver: one 11-bit frame (start, 8 data LSB first, odd parity, stop)
+; per RX FIFO word, with an idle-gap timeout that throws away a partial frame.
+;
+; Wiring (matches tools/build_ps2_reader.py):  CLOCK = ui_in[3] = PIO pin 3,  DATA = ui_in[4] = pin 4.
+;   IN_BASE  = DATA pin (4)          -> `in pins, 1` samples DATA
+;   JMP_PIN  = CLOCK pin (3)         -> `jmp pin` tests CLOCK without blocking
+;   CLOCK is waited on with `wait ... gpio 3` (absolute pin number; change the 3 if you rewire).
+;   Shift right, autopush at 11 bits, no pull, no side-set, no pin outputs (a pure receiver).
+;
+; The keyboard drives both lines and DATA is valid while CLOCK is LOW: the host samples on the
+; FALLING edge. After 11 autopushed bits the ISR holds the frame in bits [31:21]:
+;     word >> 21 = { stop[10], parity[9], data[8:1], start[0] }      (start must be 0, stop must be 1)
+;     data byte  = (word >> 22) & 0xFF        parity bit = (word >> 30) & 1   (odd parity over data)
+;
+; Idle timeout: while CLOCK stays high, x counts down 32 iterations of 9 PIO cycles = 288 PIO
+; cycles. It must be longer than the longest legal CLOCK-high time (about 50 us at 10 kHz) and
+; shorter than the gap between frames you want to resynchronise on. When it expires,
+; `mov isr, null` clears the ISR and its shift count, so a partial frame (noise, hot-plug, a
+; keyboard reset mid-byte) is discarded and the next falling edge starts a fresh frame.
+; Choose CLKDIV so that 288 PIO cycles is about 100-300 us:
+;     CLKDIV ~ (100..300 us) * f_clk / 288        (e.g. f_clk = 50 MHz -> CLKDIV 17..52)
+; A complete frame resets the ISR by itself (autopush), so the timeout only ever affects
+; partial frames. The program is position independent (labels, no absolute jump targets), so it
+; can be loaded at any origin next to other programs.
+;
+; Overflow: the RX FIFO holds 4 frames. If it is full the autopush stalls the SM and edges are
+; missed; the CPU must drain the FIFO at least once per 4 frames (a make+break pair is up to 4).
+.program ps2_rx
+start:
+    wait 0 gpio 3       ; CLOCK falls: DATA is valid
+    in pins, 1          ; sample DATA
+    wait 1 gpio 3       ; CLOCK rises
+    set x, 31           ; idle timeout counter
+tmo:
+    jmp pin high        ; CLOCK still high -> keep counting
+    jmp start           ; CLOCK already low again -> next bit
+high:
+    jmp x-- tmo [7]    ; 9 cycles per iteration; falls through when x reaches 0
+    mov isr, null       ; idle gap: discard any partial frame and resynchronise

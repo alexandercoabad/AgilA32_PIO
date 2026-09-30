@@ -203,6 +203,61 @@ class SerialSource:
         w.ext_in = (w.ext_in & ~(1 << self.pin)) | (self.cur << self.pin)
 
 
+class Ps2Keyboard:
+    """PS/2 device driving CLOCK (pin 3) and DATA (pin 4), both idle high (ui_in[3] / ui_in[4]).
+
+    One bit cell = 2*half clocks: DATA changes while CLOCK is high, CLOCK falls half//2 later
+    (data setup), stays low for `half`, then rises and DATA is held for the rest of the cell
+    (hold), like a real keyboard.  Frame = start(0), 8 data bits LSB first, odd parity, stop(1).
+    The host samples DATA on the FALLING edge of CLOCK."""
+
+    def __init__(self, clk_pin=3, data_pin=4):
+        self.clk_pin, self.data_pin = clk_pin, data_pin
+        self.q = []
+        self.left = 0
+        self.cur = (1, 1)
+        self.busy = False
+
+    def add_frame(self, byte, half=100, gap=0, *, parity=None, start=0, stop=1, nbits=11):
+        """Queue one frame.  `parity`/`start`/`stop` override the legal values (fault injection);
+        `nbits` < 11 truncates the frame (the device stops clocking mid-frame)."""
+        ones = bin(byte & 0xFF).count("1")
+        p = (1 ^ (ones & 1)) if parity is None else parity         # odd parity over the data bits
+        bits = ([start] + [(byte >> k) & 1 for k in range(8)] + [p, stop])[:nbits]
+        setup = max(2, half // 2)
+        for b in bits:
+            self.q += [(1, b, setup), (0, b, half), (1, b, half - setup)]
+        if gap:
+            self.q.append((1, 1, gap))
+
+    def add_idle(self, cycles):
+        self.q.append((1, 1, cycles))
+
+    def step(self, w):
+        if self.left == 0 and self.q:
+            clk, data, self.left = self.q.pop(0)
+            self.cur = (clk, data)
+        if self.left:
+            self.left -= 1
+            self.busy = True
+        else:
+            self.cur = (1, 1)
+            self.busy = False
+        clk, data = self.cur
+        mask = (1 << self.clk_pin) | (1 << self.data_pin)
+        w.ext_in = (w.ext_in & ~mask) | (clk << self.clk_pin) | (data << self.data_pin)
+
+
+def decode_ps2_word(word):
+    """`pio/ps2_rx.pio` autopushes 11 bits shifted right, so the frame sits in bits [31:21]:
+    start[0] data[8:1] parity[9] stop[10] of (word >> 21).  Returns (data, frame_ok) where
+    frame_ok = start low, stop high and odd parity over data+parity."""
+    f = (word >> 21) & 0x7FF
+    start, data, parity, stop = f & 1, (f >> 1) & 0xFF, (f >> 9) & 1, (f >> 10) & 1
+    ok = start == 0 and stop == 1 and ((bin(data).count("1") + parity) & 1) == 1
+    return data, ok
+
+
 # ----------------------------------------------------------------------------- UART decode
 def decode_uart(trace, bit_clk, nframes=None, start_at=0):
     """Decode 8N1 LSB-first frames from a per-cycle bit trace, checking exact bit timing.

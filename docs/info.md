@@ -335,6 +335,15 @@ lands on each scancode sent -- including after the first frame, to
 confirm the state machine re-arms itself correctly rather than only
 working once.
 
+**Limit of this reader (added with the PIO receiver below).** `test/tb_ps2_reader.v` holds each
+CLOCK level for 4000 clocks. A real keyboard clocks at 10-16.7 kHz, so its CLOCK edges are 30-50 us
+apart: 30-50 core clocks at the 1 MHz in `info.yaml`, and still only 1500-2500 clocks at 50 MHz. One
+flash page switch costs about 3000 clocks (`Note the CPU costs about 3000 clk per queued word`, below;
+also the runtime of `tb_pio_cpu_spi4.v` divided by its 55 pages), and this reader waits for every edge in a
+separate page, so it cannot keep frame sync with a real keyboard at any clock this chip is likely to run.
+It is a correct state machine that was only exercised against a keyboard roughly 100x slower than a real
+one (at the 1 MHz in `info.yaml`). `pio/ps2_rx.pio` (below) removes the dependence on CPU speed.
+
 #### Step 2: scancode -> ASCII translation
 
 `tools/build_ps2_ascii.py` builds on Step 1 (its receive state machine
@@ -744,12 +753,12 @@ SCK period, SYNC_BYP behaviour), and `tb_pio_cpu_uart.v` (end-to-end:
 real CPU + flash image + PIO in the real top level, CPU halted while the
 last byte is still on the wire).
 
-**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 19 cocotb
+**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 26 cocotb
 tests drive `pio.v` over the same bus the CPU uses, against cycle-accurate peer models
 (`test/pio_tb_lib.py`): register/FIFO behaviour; UART TX at integer, fractional and
 averaged dividers, UART RX incl. framing error and baud tolerance, two-SM UART loopback;
 SPI master modes 0-3 (plus fast SCK with `SYNC_BYP`; MOSI setup/hold measured); and I2C write, read,
-repeated-start register read, NAK -> IRQ 0, and clock stretching, with the slave model
+repeated-start register read, NAK -> IRQ 0, and clock stretching; and the PS/2 receiver (see below), with the slave model
 flagging any SDA change while SCL is high.
 
 **I2C polarity.** The Pico SDK I2C program assumes an *inverted* pad output-enable. Here
@@ -824,3 +833,45 @@ firmware rules this demo taught: a scan is always also a write (a read-back that
 erases the register, so it shifts the same value back), and the last RX word arrives *before* the
 trailing Exit1 -> Update -> RTI clocks, so the CPU must wait for the state machine to go idle
 (`PioHost.wait_sm_idle`) before halting. `test/tb_pio_cpu_jtag.v` models the TAP from the pins alone.
+
+
+**PS/2 receiver on the PIO (`pio/ps2_rx.pio`).** Eight instructions, no side-set, no output pins. CLOCK
+= PIO pin 3 (`ui_in[3]`), DATA = pin 4 (`ui_in[4]`), the same wiring as the polled reader. Configure
+`IN_BASE = 4` (`in pins, 1` samples DATA), `JMP_PIN = 3` (`jmp pin` tests CLOCK without blocking),
+autopush at 11 bits, shift right. CLOCK is waited on with `wait ... gpio 3` (absolute pin number; edit the 3
+if you rewire). The keyboard drives DATA valid while CLOCK is low, so the program samples on the falling
+edge. Each frame arrives as one RX FIFO word with the frame in bits [31:21]:
+
+    f = word >> 21;   start = f & 1;   data = (f >> 1) & 0xFF;   parity = (f >> 9) & 1;   stop = (f >> 10) & 1
+
+The PIO does not judge frames: start must be 0, stop 1 and data+parity an odd number of ones, and the CPU
+checks that (`decode_ps2_word` in `test/pio_tb_lib.py`); a bad frame is delivered as received.
+
+*Idle-gap timeout.* While CLOCK stays high, x counts 32 iterations of 9 PIO cycles = 288 PIO cycles. If it
+expires, `mov isr, null` discards a partial frame, so noise, hot-plug or a keyboard reset mid-byte cannot
+leave the receiver misaligned forever. Choose CLKDIV so that 288 PIO cycles is about 100-300 us (longer than
+the longest legal CLOCK-high time of about 50 us, shorter than the frame gap you want to resync on):
+`CLKDIV ~ (100..300 us) * f_clk / 288`, e.g. 17..52 at 50 MHz. A complete frame clears the ISR by itself, so
+back-to-back frames are unaffected. Frames that follow a partial frame with a shorter gap than the timeout stay
+misaligned until the next long gap.
+
+*Buffering and overflow.* The RX FIFO holds 4 frames. A make + break pair is up to 4 frames (`E0 F0 xx` plus
+the make code), so the CPU must drain the FIFO at least once per 4 frames (a frame is 11 bit-times, 1.1 ms at
+10 kHz, so about 4.4 ms). If the FIFO is full the autopush stalls the state machine: the four buffered frames stay intact, later
+frames are lost, and the receiver resynchronises at the next idle gap (`test_ps2_rx_fifo_overflow_...`).
+
+*What is tested* (`test/test_pio_protocols.py`, all at the `pio.v` level against `Ps2Keyboard` in
+`test/pio_tb_lib.py`, a model that changes DATA while CLOCK is high, gives half a half-period of setup and
+hold, and sends odd parity): keystroke traffic including extended keys and 0x00 / 0xFF / 0xAA; real rates
+of 10 kHz and 16.7 kHz on the 50 MHz sim clock with CLKDIV 25; a 4-frame burst held while nobody reads the
+FIFO; overflow and recovery; resync after a 5-bit partial frame; bad parity and a low stop bit reported to
+the CPU; and SM1 receiving PS/2 while SM0 streams 96 bytes over SPI mode 0 out of the shared instruction
+memory (`ps2_rx` loaded at origin 8; every one of the 1536 SCK edges happened during PS/2 frames). Mutation
+checks: replacing `mov isr, null` with a jump, or making the timeout never expire, fails the partial-frame
+test; shortening the timeout to `set x, 3` fails all five fast tests.
+
+*Not done:* a CPU-driven top-level demo (flash image + `tt_um_agila32` testbench) for this receiver; host-to-
+device commands (LED set, reset), which need CLOCK/DATA driven open-drain on the `uio[5:4]` pins (pins 8/9)
+instead of the read-only `ui_in[3]` / `ui_in[4]`; inhibiting the keyboard by holding CLOCK low for flow
+control (same requirement); anything on a real keyboard. The modeled keyboard is my reading of the PS/2
+timing, not a measured device.

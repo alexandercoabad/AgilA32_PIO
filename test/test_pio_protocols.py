@@ -16,6 +16,7 @@ from cocotb.triggers import ClockCycles, RisingEdge
 from pio_tb_lib import *            # noqa: F401,F403
 import pio_i2c
 from pio_tb_lib import (PioBus, World, Wire, SerialSource, SpiSlave, I2cSlave, decode_uart,
+                        Ps2Keyboard, decode_ps2_word,
                         assemble, sm_reg, R_CTRL, R_IRQ, R_FSTAT, R_PIN_OWN, R_SYNC_BYP,
                         R_PINS_IN, R_INFO, R_IMEM, SM_ADDR, SM_INSTR, SM_TXF, SM_EXEC,
                         SM_SHIFT, SM_CLKDIV, SM_PINCTRL, shiftctrl, FIFO_DEPTH)
@@ -478,3 +479,202 @@ async def test_i2c_clock_stretching(dut):
     highs = [c for c, lvl in slave.scl_edges if lvl == 1]
     longest = max((h - l for l in lows for h in highs if h > l and h - l > 0), default=0)
     assert longest >= 300, "SCL should have been held low >= 300 clocks by the slave (%d)" % longest
+
+
+# ============================================================================= PS/2 receiver
+# `ps2_rx.pio`: CLOCK = pin 3 (ui_in[3]), DATA = pin 4 (ui_in[4]), one 11-bit frame per RX FIFO
+# word, idle-gap timeout of 288 PIO cycles (= 288 * CLKDIV clocks) that drops a partial frame.
+PS2_FRAME = 11
+
+
+async def ps2_setup(dut, div=1):
+    bus, world = await setup(dut)
+    prog = load_src("ps2_rx.pio")
+    await bus.load_program(prog)
+    await bus.sm_setup(0, prog, in_base=4, jmp_pin=3, autopush=True, push_thresh=PS2_FRAME,
+                       in_right=True, div=(div, 0))
+    kb = Ps2Keyboard()
+    world.devs.append(kb)
+    world.ext_in |= (1 << 3) | (1 << 4)                     # both lines idle high
+    await ClockCycles(dut.clk, 4)
+    await bus.set_enable(0)
+    return bus, world, kb
+
+
+async def collect_ps2(bus, n, timeout=200000):
+    words = []
+    for _ in range(timeout):
+        if len(words) >= n:
+            break
+        if await bus.rx_level(0):
+            words.append(await bus.rx_get(0))
+    return words
+
+
+async def settle(dut, kb, extra=2000):
+    """Wait until the keyboard model has played everything out, plus `extra` idle clocks."""
+    while kb.q or kb.busy:
+        await ClockCycles(dut.clk, 500)
+    await ClockCycles(dut.clk, extra)
+
+
+@cocotb.test()
+async def test_ps2_rx_keystrokes(dut):
+    """Real keystroke traffic (Scan Code Set 2): 'A' make + break, an extended key (up arrow) make
+    + break, and the edge-case bytes 0x00 / 0xFF / 0xAA.  Every frame arrives as ONE RX word with
+    start = 0, stop = 1, correct odd parity and the right data byte, in order."""
+    bus, world, kb = await ps2_setup(dut)
+    data = [0x1C, 0xF0, 0x1C, 0xE0, 0x75, 0xE0, 0xF0, 0x75, 0x00, 0xFF, 0xAA]
+    for b in data:
+        kb.add_frame(b, half=100, gap=600)                 # gap 600 > idle timeout 288
+    words = await collect_ps2(bus, len(data))
+    got = [decode_ps2_word(w) for w in words]
+    assert [d for d, _ in got] == data, [hex(d) for d, _ in got]
+    assert all(ok for _, ok in got), got
+    assert await bus.rx_level(0) == 0
+
+
+@cocotb.test()
+async def test_ps2_rx_realistic_timing(dut):
+    """Real PS/2 rates on the 50 MHz sim clock: the two ends of the spec, CLOCK at 10 kHz and
+    16.7 kHz (half periods 2500 / 1500 clocks = 50 / 30 us).  CLKDIV 25 makes the idle timeout
+    7200 clocks (144 us): longer than any legal CLOCK-high time, shorter than the 200 us
+    inter-frame gap."""
+    for half in (2500, 1500):
+        bus, world, kb = await ps2_setup(dut, div=25)
+        data = [0x1C, 0xF0]                                # make + first byte of a break
+        for b in data:
+            kb.add_frame(b, half=half, gap=10000)
+        words = await collect_ps2(bus, len(data))
+        got = [decode_ps2_word(w) for w in words]
+        assert [d for d, _ in got] == data and all(ok for _, ok in got), (half, got)
+
+
+@cocotb.test()
+async def test_ps2_rx_fifo_buffers_a_burst_while_cpu_is_busy(dut):
+    """The point of doing PS/2 in the PIO: the CPU can be busy elsewhere (drawing, flash paging)
+    while frames keep arriving.  Four frames arrive back to back with nobody reading the RX
+    FIFO; afterwards all four are there, in order and intact."""
+    bus, world, kb = await ps2_setup(dut)
+    data = [0xE0, 0xF0, 0x75, 0x1C]
+    for b in data:
+        kb.add_frame(b, half=100, gap=40)                  # gap 40 < idle timeout: back to back
+    await settle(dut, kb, extra=1000)
+    assert await bus.rx_level(0) == FIFO_DEPTH
+    words = [await bus.rx_get(0) for _ in range(FIFO_DEPTH)]
+    got = [decode_ps2_word(w) for w in words]
+    assert [d for d, _ in got] == data and all(ok for _, ok in got), got
+
+
+@cocotb.test()
+async def test_ps2_rx_fifo_overflow_keeps_old_frames_and_recovers(dut):
+    """If the CPU stays away for more than 4 frames the oldest 4 are preserved (the SM stalls on
+    the autopush; nothing already buffered is corrupted), the rest are lost, and after an idle gap
+    the receiver is back in sync: the next frame decodes correctly."""
+    bus, world, kb = await ps2_setup(dut)
+    burst = [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77]
+    for b in burst:
+        kb.add_frame(b, half=100, gap=40)
+    await settle(dut, kb, extra=1000)
+    first4 = [decode_ps2_word(await bus.rx_get(0)) for _ in range(FIFO_DEPTH)]
+    assert [d for d, _ in first4] == burst[:4] and all(ok for _, ok in first4), first4
+    await ClockCycles(dut.clk, 3000)                       # idle gap > timeout: resynchronise
+    while await bus.rx_level(0):                           # drop whatever the overflow left behind
+        await bus.rx_get(0)
+    kb.add_frame(0xA5, half=100, gap=600)
+    words = await collect_ps2(bus, 1, timeout=20000)
+    assert len(words) == 1 and decode_ps2_word(words[0]) == (0xA5, True), words
+    assert await bus.rx_level(0) == 0
+
+
+@cocotb.test()
+async def test_ps2_rx_idle_timeout_resyncs_after_partial_frame(dut):
+    """A frame that stops after 5 bits (line noise, hot-plug, a keyboard reset mid-byte) leaves the
+    state machine holding 5 stray bits.  The idle-gap timeout discards them, so the NEXT frame is
+    decoded from its own start bit and nothing bogus is pushed."""
+    bus, world, kb = await ps2_setup(dut)
+    kb.add_frame(0x1C, half=100, gap=1500, nbits=5)        # truncated frame, then a long idle gap
+    kb.add_frame(0x5A, half=100, gap=600)
+    words = await collect_ps2(bus, 1, timeout=20000)
+    await settle(dut, kb, extra=1500)
+    extra = []
+    while await bus.rx_level(0):
+        extra.append(await bus.rx_get(0))
+    assert not extra, "nothing else may be pushed: %s" % [hex(w) for w in extra]
+    assert len(words) == 1 and decode_ps2_word(words[0]) == (0x5A, True), [hex(w) for w in words]
+
+
+@cocotb.test()
+async def test_ps2_rx_reports_bad_parity_and_framing_to_the_cpu(dut):
+    """The PIO does not judge frames: a bad-parity frame and a frame with a low stop bit are
+    delivered as received, and the CPU-side check (`decode_ps2_word`: start/stop/parity) flags
+    exactly those two while the good frames around them pass."""
+    bus, world, kb = await ps2_setup(dut)
+    kb.add_frame(0x1C, half=100, gap=600)
+    kb.add_frame(0x2D, half=100, gap=600, parity=0 if bin(0x2D).count("1") % 2 == 0 else 1) # wrong
+    kb.add_frame(0x3B, half=100, gap=600, stop=0)
+    kb.add_frame(0x4C, half=100, gap=600)
+    words = await collect_ps2(bus, 4)
+    got = [decode_ps2_word(w) for w in words]
+    assert [d for d, _ in got] == [0x1C, 0x2D, 0x3B, 0x4C], got
+    assert [ok for _, ok in got] == [True, False, False, True], got
+
+
+class _ClockAndFrameProbe:
+    """Counts SPI SCK edges that happen while a PS/2 frame is on the wire."""
+
+    def __init__(self, kb):
+        self.kb, self.both, self.last = kb, 0, 0
+
+    def step(self, w):
+        sck = (w.pin_out >> 1) & 1
+        if self.kb.busy and sck != self.last:
+            self.both += 1
+        self.last = sck
+
+
+@cocotb.test()
+async def test_ps2_rx_runs_alongside_spi_master(dut):
+    """The point of the whole exercise: SM0 streams 96 bytes over SPI (mode 0, MOSI/SCK/MISO on
+    pins 0-2) WHILE SM1 captures PS/2 frames (pins 3-4), both out of the shared instruction memory
+    (ps2_rx loaded at origin 8).  Neither disturbs the other: every SPI byte and every PS/2 frame
+    is intact, and thousands of SCK edges happened during PS/2 frames."""
+    bus, world = await setup(dut)
+    spi, ps2 = load_src("spi_master.pio", 0), load_src("ps2_rx.pio", 8)
+    await bus.load_program(spi)
+    await bus.load_program(ps2)
+    await bus.sm_setup(0, spi, out_base=0, out_count=1, side_base=1, in_base=2,
+                       autopull=True, pull_thresh=8, autopush=True, push_thresh=8,
+                       out_right=False, in_right=False, div=(4, 0))
+    await bus.sm_setup(1, ps2, in_base=4, jmp_pin=3, autopush=True, push_thresh=PS2_FRAME,
+                       in_right=True, div=(1, 0))
+    rnd = random.Random(7)
+    tx = [rnd.randrange(256) for _ in range(96)]
+    miso = [rnd.randrange(256) for _ in range(96)]
+    slave = SpiSlave(0, miso)
+    kb = Ps2Keyboard()
+    probe = _ClockAndFrameProbe(kb)
+    world.devs += [slave, kb, probe]
+    world.ext_in |= (1 << 3) | (1 << 4)
+    keys = [0x1C, 0xF0, 0x1C, 0x2D, 0xF0, 0x2D]
+    for b in keys:
+        kb.add_frame(b, half=100, gap=600)
+    await bus.write(R_PIN_OWN, 0b011)
+    await bus.set_enable(0)
+    await bus.set_enable(1)
+    spi_got, ps2_words, sent = [], [], 0
+    for _ in range(60000):
+        if sent < len(tx) and await bus.tx_level(0) < FIFO_DEPTH:
+            await bus.tx_put(0, tx[sent] << 24)
+            sent += 1
+        if await bus.rx_level(0):
+            spi_got.append((await bus.rx_get(0)) & 0xFF)
+        if await bus.rx_level(1):
+            ps2_words.append(await bus.rx_get(1))
+        if len(spi_got) == len(tx) and len(ps2_words) == len(keys):
+            break
+    assert slave.mosi_bytes == tx, "SPI MOSI corrupted while PS/2 was running"
+    assert spi_got == miso, "SPI MISO corrupted while PS/2 was running"
+    got = [decode_ps2_word(w) for w in ps2_words]
+    assert [d for d, _ in got] == keys and all(ok for _, ok in got), got
+    assert probe.both > 500, "SPI and PS/2 did not overlap in time (%d SCK edges)" % probe.both
