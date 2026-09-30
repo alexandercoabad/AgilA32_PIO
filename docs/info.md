@@ -810,3 +810,17 @@ The CPU reads each mode's MISO byte from the RX FIFO and sends it out as the fir
 next mode, then shows the last one on the LED pads and halts. `test/tb_pio_cpu_spi4.v` decodes the
 wire from the pins alone and checks idle level, edge count, MOSI setup/hold, relay, and that SCK is
 silent while CS is high.
+
+**JTAG: the CPU walks a TAP through the PIO.** `pio/jtag.pio` (24 words, original, no SDK
+equivalent) is a TCK generator, TMS/TDI driver and TDO sampler: TDI = `uo_out[0]`, TMS = `uo_out[1]`,
+TCK = `uo_out[2]`, TDO = `ui_in[3]`. The CPU is the JTAG probe software and decides every TAP move
+by pushing header words (`n-1` in bits 4:0; bit 5 = shift data, else a TMS sequence; a data shift
+takes TDI from the next word, drives TMS = 1 on the last pulse and pushes the captured TDO word).
+`tools/build_pio_jtag.py` resets the TAP, reads the 32-bit IDCODE, loads IR = USER, writes the
+16-bit USER register with the IDCODE bits it just read from the RX FIFO (a CPU relay), reads it
+back, shows the low byte on the LED pads and halts: 95 TCK pulses. Because the ISR shifts right, a
+32-bit scan returns the register itself and the low half goes straight back out LSB first. Two
+firmware rules this demo taught: a scan is always also a write (a read-back that shifts zeros in
+erases the register, so it shifts the same value back), and the last RX word arrives *before* the
+trailing Exit1 -> Update -> RTI clocks, so the CPU must wait for the state machine to go idle
+(`PioHost.wait_sm_idle`) before halting. `test/tb_pio_cpu_jtag.v` models the TAP from the pins alone.

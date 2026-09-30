@@ -1,0 +1,62 @@
+; JTAG (IEEE 1149.1) master: TCK generator + TMS/TDI driver + TDO sampler.  Original program.
+;
+; Pins (PIO pin numbers):  TDI = OUT pin 0,  TMS = SET pin 1,  TCK = side-set pin 2,  TDO = IN pin 3.
+; Config: OUT_BASE=0 (1), SET_BASE=1 (1), SIDESET_BASE=2 (1 bit, mandatory), IN_BASE=3,
+;         autopull OFF, autopush OFF, OUT shift RIGHT and IN shift RIGHT (both LSB first).
+;
+; The host talks to it in FIFO words.  Header word (LSB first):
+;     [4:0]   n-1        number of TCK pulses minus one (1..32 pulses)
+;     [5]     mode       0 = TMS sequence, 1 = data shift
+;     mode 0: [15:6] the TMS value for each pulse, first pulse in bit 6 (so at most 10 pulses).
+;             TDI is left unchanged.
+;     mode 1: the NEXT FIFO word is the TDI data, LSB first.  TMS is 0 for the first n-1 pulses and
+;             1 on the last one (Shift-xR -> Exit1-xR).  TDO is sampled on every rising TCK edge and
+;             the n sampled bits are pushed as one word: because the ISR shifts right, the first bit
+;             ends up in bit (32-n) and the last in bit 31 -- for n = 32 the word IS the register
+;             read, LSB first; for n < 32 the data sits in the top n bits.
+;
+; Timing (all ticks are PIO clocks, TCK period is 7 ticks per data bit / 6..7 per TMS pulse):
+;   * TDI and TMS only ever change while TCK is LOW (TCK is driven low by an earlier instruction).
+;   * data setup before the rising edge >= 2 ticks;  hold after it >= 5 ticks.
+;   * TDO is sampled on the tick that raises TCK; the target updates it on the falling edge, several
+;     ticks earlier, so the input synchroniser latency (2 clocks) never matters at CLKDIV >= 1.
+;   * TCK idles low: every stall (empty TX FIFO at `pull`, full RX FIFO at `push`) is at side 0.
+.program jtag
+.side_set 1
+
+.wrap_target
+cmd:
+    pull block           side 0        ; header word
+    out x, 5             side 0        ; x = pulses - 1
+    out y, 1             side 0        ; y = mode
+    jmp !y tms           side 0        ; mode 0: TMS sequence
+
+; ---- data shift: TDI from the next word, TMS = 0 except on the last pulse
+    pull block           side 0        ; TDI data
+sbit:
+    jmp !x slast         side 0        ; last pulse?
+    set pins, 0          side 0        ; TMS = 0
+    out pins, 1          side 0 [1]    ; TDI = next data bit (TCK low), 2 ticks of setup
+    in pins, 1           side 1 [1]    ; TCK rises, sample TDO, TCK high for 2 ticks
+    jmp x-- sbit         side 0        ; TCK falls (x >= 1 here: always taken)
+slast:
+    set pins, 1          side 0        ; TMS = 1: leave the Shift state on this pulse
+    out pins, 1          side 0 [1]
+    in pins, 1           side 1 [1]
+    nop                  side 0 [1]    ; TCK falls; give TDO time to settle before anything else
+    push block           side 0        ; the captured word (stalls with TCK low if RX FIFO is full)
+    jmp cmd              side 0
+
+; ---- TMS sequence: one TMS bit per pulse
+tms:
+    out y, 1             side 0        ; y = TMS for this pulse
+    jmp !y tms_lo        side 0
+    set pins, 1          side 0 [1]
+    jmp tms_clk          side 0
+tms_lo:
+    set pins, 0          side 0 [1]
+tms_clk:
+    nop                  side 1 [1]    ; TCK rises (TMS stable for >= 2 ticks before)
+    nop                  side 0 [1]    ; TCK falls
+    jmp x-- tms          side 0        ; falls through to the wrap (-> cmd) after the last pulse
+.wrap

@@ -203,6 +203,36 @@ class PioHost:
         a.AND(7, 7, 6)
         a.BNE(7, 0, lbl)                              # still empty -> keep spinning
 
+    def wait_sm_idle(self, sm, pc):
+        """Spin until state machine `sm` has consumed every TX word AND is back at instruction
+        `pc` (its command-loop top, where it stalls on an empty `pull`).  Two atomic page ops.
+        Use it when the SM keeps working AFTER it produced the last RX word (e.g. trailing TMS
+        clocks): the RX word alone does not mean the sequence is finished.  Order matters: the TX
+        FIFO is checked first, so once it is empty no further word can restart the loop, and a
+        later PC == pc means the last command ran to completion.  Leaves PIO_IDX on SM_ADDR."""
+        # -- TX level (FLEVEL[2:0]) == 0
+        self._reserve(self._li_bytes(sm_reg(sm, SM_FLEVEL)) + 4 + 4 * 4)
+        self._li(self.TMP, sm_reg(sm, SM_FLEVEL))
+        a = self.p.page
+        a.SW(self.TMP, 0, PIO_IDX)
+        self._wait_n = getattr(self, "_wait_n", 0) + 1
+        lbl = "idl%d" % self._wait_n
+        a.label(lbl)
+        a.LW(7, 0, PIO_DATA)
+        a.ANDI(7, 7, 7)
+        a.BNE(7, 0, lbl)
+        # -- ADDR[4:0] == pc
+        self._reserve(self._li_bytes(sm_reg(sm, SM_ADDR)) + 4 + 4 * 5)
+        self._li(self.TMP, sm_reg(sm, SM_ADDR))
+        a = self.p.page
+        a.SW(self.TMP, 0, PIO_IDX)
+        lbl2 = "idp%d" % self._wait_n
+        a.label(lbl2)
+        a.LW(7, 0, PIO_DATA)
+        a.ANDI(7, 7, 31)
+        a.ADDI(7, 7, -pc)
+        a.BNE(7, 0, lbl2)
+
     def rx_pop(self, sm, rd):
         """rd <- RX FIFO `sm` head word (the read pops it).  Call wait_rx_ready first."""
         self.write_idx(sm_reg(sm, SM_RXF))
