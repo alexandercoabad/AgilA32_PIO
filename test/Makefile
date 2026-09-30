@@ -103,5 +103,7 @@ standalone-tests:
 	vvp /tmp/tt_tb_pio_cpu_i2c.vvp | tee /tmp/tt_out_pio_cpu_i2c.log
 	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_multi.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_multi.v
 	vvp /tmp/tt_tb_pio_cpu_multi.vvp | tee /tmp/tt_out_pio_cpu_multi.log
+	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_spi4.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_spi4.v
+	vvp /tmp/tt_tb_pio_cpu_spi4.vvp | tee /tmp/tt_out_pio_cpu_spi4.log
 	$(MAKE) -f Makefile.proto
 	@! grep -l "FAIL" /tmp/tt_out_*.log

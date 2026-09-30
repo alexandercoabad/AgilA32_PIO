@@ -20,6 +20,7 @@ from-scratch RISC-V core is where this whole line of projects started.
 | UART RX | PIO (`uart_rx_mini`) | Done | `tb_pio_uart.v` (TX+RX loopback, framing-error IRQ), cocotb (framing error, baud tolerance, two-SM loopback) |
 | SPI master, modes 0-3 | PIO (`spi_master`, `spi_cpha1`, `spi_cpol1_cpha0`, `spi_cpol1_cpha1`) | Done | `tb_pio_spi.v` (mode 0: SCK period, `SYNC_BYP`), cocotb `test_spi_mode0`-`test_spi_mode3` (data both ways, SCK idle level and edge count, SCK period, MOSI setup/hold, fast SCK) |
 | I2C master | PIO (`i2c`) | Done | cocotb (write, read, repeated-start register read, NAK -> IRQ 0, clock stretching), CPU demo `tb_pio_cpu_i2c.v` |
+| SPI modes 0-3, CPU-driven | PIO reprogrammed by CPU at run time, CPU relays data | Done | `tb_pio_cpu_spi4.v` (one image, four modes back to back: SCK idle level, 16 edges, MOSI setup/hold, CS handled by the CPU, MISO byte read by the CPU and re-sent on MOSI in the next mode) |
 | UART -> SPI -> I2C on one state machine | PIO, reprogrammed by CPU at run time | Done | `tb_pio_cpu_multi.v` (all three waveforms, strictly in sequence) |
 | I2C slave / multi-master | PIO | Not yet | -- |
 | PS/2 keyboard | CPU bit-bang (not PIO) | Done | `tb_ps2_reader.v`, `tb_ps2_ascii.v` |
@@ -100,6 +101,17 @@ requirement demonstrated, not just claimed.
 receiver, an SPI slave and an I2C slave, and that the phases ran strictly in
 sequence.)
 
+**2b. Four SPI modes, with the CPU in the data path.** `tools/build_pio_spi4.py`
+builds one flash image that reprograms the same state machine for SPI mode 0, 1,
+2 and 3 in turn. The CPU drives chip-select itself (`GPIO_OUT` bit 2), and it
+relays data: the MISO byte it reads out of the RX FIFO in one mode is sent back
+out on MOSI as the first byte of the next. A slave model that decodes the pins
+only (per CPOL/CPHA, never looking at the PIO program) therefore checks the whole
+chain slave MISO -> input sync -> autopush -> RX FIFO -> CPU load/store -> TX
+FIFO -> autopull -> MOSI in every mode, plus SCK idle level, 16 edges, MOSI
+setup/hold, and that SCK stays quiet while CS is high.
+(`test/tb_pio_cpu_spi4.v`; mutation-checked, see `CHANGES_feature8.md`.)
+
 **3. The CPU can leave; the protocol keeps going.** After queueing its last
 word, the firmware executes `EBREAK`, which parks the core. The PIO finishes
 the transfer alone -- in the I2C demo it generates the STOP condition with the
@@ -158,7 +170,7 @@ register timing estimate from a Yosys JSON netlist and a liberty file.
 The CPU costs about 3000 clock cycles per queued word (flash paging), so a
 bus must be slower than that per byte for firmware to stay ahead of it -- the
 FIFOs and the halt-and-continue behaviour above are how this is worked
-around. SPI modes 2/3 are verified at the `pio.v` level only, and firmware must set the SCK bit in `GPIO_OUT` before `PIN_OWN` to avoid a glitch. UART, SPI (modes 0-3) and I2C master are demonstrated in simulation. Low-speed USB
+around. All four SPI modes are also run end to end from CPU firmware (`tb_pio_cpu_spi4.v`); firmware must set the SCK bit in `GPIO_OUT` before the first `PIN_OWN`, and any forced instruction on an SM with plain side-set must carry the idle SCK level in bit 12, or SCK glitches. UART, SPI (modes 0-3) and I2C master are demonstrated in simulation. Low-speed USB
 and 10BASE-T (the brief's stretch goals) are not attempted here, and nothing
 has been measured on silicon yet.
 
@@ -336,7 +348,7 @@ tools/
   build_st7789_flash_image.py  real ST7789 LCD driver, PagedAsm-based, bank-switched
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
-  pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py   PIO assembler/disassembler, flash-image host library, UART demo
+  pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py, build_pio_spi4.py   PIO assembler/disassembler, flash-image host library, UART demo
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
@@ -353,7 +365,7 @@ test/
   tb_ps2_ascii.v          standalone: PS/2 frames -> translated ASCII on GPIO_OUT (Step 2)
   tb_qspi_clkdiv.v        standalone: QSPI_CTRL clock-divider timing, engine-level and through mem.v
   tb_spi_periph.v         standalone: generic SPI peripheral (SPI_DATA, CS2), engine-level and through mem.v
-  tb_pio_isa.v, tb_pio_uart.v, tb_pio_spi.v, tb_pio_cpu_uart.v, tb_pio_cpu_i2c.v, tb_pio_cpu_multi.v, test_pio_protocols.py   PIO block tests (see docs/info.md)
+  tb_pio_isa.v, tb_pio_uart.v, tb_pio_spi.v, tb_pio_cpu_uart.v, tb_pio_cpu_i2c.v, tb_pio_cpu_multi.v, tb_pio_cpu_spi4.v, test_pio_protocols.py   PIO block tests (see docs/info.md)
   alu_test_mem.v          minimal flat ROM+RAM harness (not mem.v) used only by tb_alu_test.v
   tb_alu_test.v           standalone: every asm_pineapple.py opcode, run through the real core, checked
                           against hand-computed register values

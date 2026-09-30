@@ -187,6 +187,54 @@ class PioHost:
             self.write_idx(sm_reg(sm, SM_TXF))
             self.write_data(w)
 
+    def wait_rx_ready(self, sm):
+        """Spin until RX FIFO `sm` holds a word (FSTAT.RXEMPTY[sm] == 0).  One atomic page op,
+        the mirror image of wait_tx_ready.  Leaves PIO_IDX pointing at FSTAT."""
+        nbytes = self._li_bytes(R_FSTAT) + 4 + self._li_bytes(1 << (8 + sm)) + 4 * 3
+        self._reserve(nbytes)
+        self._li(self.TMP, R_FSTAT)
+        a = self.p.page
+        a.SW(self.TMP, 0, PIO_IDX)
+        self._wait_n = getattr(self, "_wait_n", 0) + 1
+        lbl = "rxw%d" % self._wait_n
+        self._li(6, 1 << (8 + sm))                    # mask = RXEMPTY[sm]
+        a.label(lbl)
+        a.LW(7, 0, PIO_DATA)
+        a.AND(7, 7, 6)
+        a.BNE(7, 0, lbl)                              # still empty -> keep spinning
+
+    def rx_pop(self, sm, rd):
+        """rd <- RX FIFO `sm` head word (the read pops it).  Call wait_rx_ready first."""
+        self.write_idx(sm_reg(sm, SM_RXF))
+        self.read_data(rd)
+
+    def shift_left(self, rd, sh):
+        """rd <<= sh  (e.g. move an 8-bit RX byte into the top byte an MSB-first OSR expects)."""
+        self._reserve(4)
+        self.p.page.SLLI(rd, rd, sh)
+
+    def shift_right(self, rd, sh):
+        """rd >>= sh (logical)."""
+        self._reserve(4)
+        self.p.page.SRLI(rd, rd, sh)
+
+    def store_data_reg(self, rs):
+        """SW rs -> PIO_DATA: push a CPU register value into whatever PIO_IDX selects."""
+        self._reserve(4)
+        self.p.page.SW(rs, 0, PIO_DATA)
+
+    def tx_push_reg_paced(self, sm, rs):
+        """Wait for TX room, then push the value held in register `rs` (the CPU relays data)."""
+        self.wait_tx_ready(sm)
+        self.write_idx(sm_reg(sm, SM_TXF))
+        self.store_data_reg(rs)
+
+    def write_gpio_out_imm(self, value):
+        """LED_OUT (0xF0) <- immediate byte (drives the uo_out pads that PIO does not own)."""
+        self._reserve(self._li_bytes(value) + 4)
+        self._li(self.TMP, value)
+        self.p.page.SB(self.TMP, 0, 0xF0)
+
     def delay(self, clocks):
         """Busy-wait for AT LEAST `clocks` core clocks (a 2-instruction countdown loop, at least
         ~14 clk per iteration, so iterations = clocks // 10 always over-waits). One atomic op."""

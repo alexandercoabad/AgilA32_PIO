@@ -802,3 +802,11 @@ sits in a busy loop (`PioHost.delay`) for each protocol to finish. `test/tb_pio_
 checks all three waveforms against a UART receiver, an SPI slave and an I2C slave, and that the
 phases ran strictly one after the other. Hand-over is glitch-free: UART idles high before it
 owns the pad, SCK is preset low before SPI owns it, and the I2C pins are handed over released.
+
+**One image, four SPI modes, CPU in the data path.** `tools/build_pio_spi4.py` builds a second
+reprogrammability demo: the same PIO state machine is reloaded for SPI mode 0, 1, 2 and 3, with
+MOSI = `uo_out[0]`, SCK = `uo_out[1]`, MISO = `ui_in[2]` and CS_n = `uo_out[2]` driven by the CPU.
+The CPU reads each mode's MISO byte from the RX FIFO and sends it out as the first MOSI byte of the
+next mode, then shows the last one on the LED pads and halts. `test/tb_pio_cpu_spi4.v` decodes the
+wire from the pins alone and checks idle level, edge count, MOSI setup/hold, relay, and that SCK is
+silent while CS is high.
