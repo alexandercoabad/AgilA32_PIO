@@ -12,6 +12,25 @@ a RISC-V CPU built entirely out of discrete 7400-series logic chips (no
 FPGA, no microcontroller) -- the "just basic logic" idea of a minimal,
 from-scratch RISC-V core is where this whole line of projects started.
 
+## Protocol coverage
+
+| Protocol | Runs on | Status | Verified by |
+|---|---|---|---|
+| UART TX | PIO (`uart_tx`) | Done | `tb_pio_uart.v` (cycle-exact 8N1 waveform, fractional divider), cocotb (integer, fractional and averaged dividers), end-to-end CPU demo `tb_pio_cpu_uart.v` |
+| UART RX | PIO (`uart_rx_mini`) | Done | `tb_pio_uart.v` (TX+RX loopback, framing-error IRQ), cocotb (framing error, baud tolerance, two-SM loopback) |
+| SPI master, modes 0 and 1 | PIO (`spi_master`, `spi_cpha1`) | Done | `tb_pio_spi.v` (SCK period, `SYNC_BYP`), cocotb (both modes, fast SCK) |
+| I2C master | PIO (`i2c`) | Done | cocotb (write, read, repeated-start register read, NAK -> IRQ 0, clock stretching), CPU demo `tb_pio_cpu_i2c.v` |
+| UART -> SPI -> I2C on one state machine | PIO, reprogrammed by CPU at run time | Done | `tb_pio_cpu_multi.v` (all three waveforms, strictly in sequence) |
+| SPI modes 2 and 3 | PIO | Not yet | -- |
+| I2C slave / multi-master | PIO | Not yet | -- |
+| PS/2 keyboard | CPU bit-bang (not PIO) | Done | `tb_ps2_reader.v`, `tb_ps2_ascii.v` |
+| SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
+| JTAG, SWD, CAN | PIO | Not attempted | -- |
+| Low-speed USB, 10BASE-T (brief's stretch goals) | PIO | Not attempted | -- |
+
+All results above are from simulation (RTL and gate-level). Nothing has been
+measured on silicon yet.
+
 ## Lineage: AgilA8 -> AgilA32
 
 Structurally and feature-wise, though, AgilA32 is the direct successor
