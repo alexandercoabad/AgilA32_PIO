@@ -141,12 +141,11 @@ has been measured on silicon yet.
 
 ## Layout
 
-<img width="909" height="507" alt="Screenshot 2026-09-30 at 9 55 39 AM" src="https://github.com/user-attachments/assets/d88ef3de-51db-43f4-a758-97518fc3055b" />
+<img width="909" height="507" alt="Screenshot 2026-09-30 at 9 55 39 AM" src="https://github.com/user-attachments/assets/dd35fa5a-1f16-4868-9cc4-c33615c759e6" />
 
 
 
 https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/AgilA32_PIO/tinytapeout.oas&pdk=ihp-sg13g2
-<img width="468" height="218" alt="image" src="https://github.com/user-attachments/assets/11bdc999-53e0-40fe-96be-b69c5ff4937a" />
 
 
 
