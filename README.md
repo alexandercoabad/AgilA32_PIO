@@ -18,10 +18,9 @@ from-scratch RISC-V core is where this whole line of projects started.
 |---|---|---|---|
 | UART TX | PIO (`uart_tx`) | Done | `tb_pio_uart.v` (cycle-exact 8N1 waveform, fractional divider), cocotb (integer, fractional and averaged dividers), end-to-end CPU demo `tb_pio_cpu_uart.v` |
 | UART RX | PIO (`uart_rx_mini`) | Done | `tb_pio_uart.v` (TX+RX loopback, framing-error IRQ), cocotb (framing error, baud tolerance, two-SM loopback) |
-| SPI master, modes 0 and 1 | PIO (`spi_master`, `spi_cpha1`) | Done | `tb_pio_spi.v` (SCK period, `SYNC_BYP`), cocotb (both modes, fast SCK) |
+| SPI master, modes 0-3 | PIO (`spi_master`, `spi_cpha1`, `spi_cpol1_cpha0`, `spi_cpol1_cpha1`) | Done | `tb_pio_spi.v` (mode 0: SCK period, `SYNC_BYP`), cocotb `test_spi_mode0`-`test_spi_mode3` (data both ways, SCK idle level and edge count, SCK period, MOSI setup/hold, fast SCK) |
 | I2C master | PIO (`i2c`) | Done | cocotb (write, read, repeated-start register read, NAK -> IRQ 0, clock stretching), CPU demo `tb_pio_cpu_i2c.v` |
 | UART -> SPI -> I2C on one state machine | PIO, reprogrammed by CPU at run time | Done | `tb_pio_cpu_multi.v` (all three waveforms, strictly in sequence) |
-| SPI modes 2 and 3 | PIO | Not yet | -- |
 | I2C slave / multi-master | PIO | Not yet | -- |
 | PS/2 keyboard | CPU bit-bang (not PIO) | Done | `tb_ps2_reader.v`, `tb_ps2_ascii.v` |
 | SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
@@ -125,13 +124,18 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 16 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 19 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
-  tolerance, two-SM UART loopback, SPI master modes 0 and 1 (plus fast SCK
+  tolerance, two-SM UART loopback, SPI master modes 0-3 (plus fast SCK
   with `SYNC_BYP`), and I2C write, read, repeated-start register read, NAK
   raising IRQ 0, and clock stretching.
+- SPI modes 2 and 3 idle SCK high without a pad-inversion override (the Pico SDK
+  uses one; this block has none) by inverting the side-set values. The SPI slave
+  model measures MOSI setup/hold, because a model that samples in the same cycle
+  MOSI changes cannot tell a correct program from one whose data and clock edge
+  coincide. Swapping the two programs makes the tests fail.
 - The I2C slave model flags any SDA change while SCL is high, so START/STOP
   conditions are checked as protocol events, not just as edges.
 - `tb_pio_isa.v` checks the semantics of every PIO instruction. While
@@ -154,7 +158,7 @@ register timing estimate from a Yosys JSON netlist and a liberty file.
 The CPU costs about 3000 clock cycles per queued word (flash paging), so a
 bus must be slower than that per byte for firmware to stay ahead of it -- the
 FIFOs and the halt-and-continue behaviour above are how this is worked
-around. UART, SPI (modes 0/1) and I2C master are demonstrated. Low-speed USB
+around. SPI modes 2/3 are verified at the `pio.v` level only, and firmware must set the SCK bit in `GPIO_OUT` before `PIN_OWN` to avoid a glitch. UART, SPI (modes 0-3) and I2C master are demonstrated in simulation. Low-speed USB
 and 10BASE-T (the brief's stretch goals) are not attempted here, and nothing
 has been measured on silicon yet.
 
@@ -271,7 +275,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
-      `uio[5:4]`). UART TX/RX, SPI master (modes 0/1) and I2C master run as Pico SDK
+      `uio[5:4]`). UART TX/RX, SPI master (modes 0-3) and I2C master run as Pico SDK
       programs (`pio/`), assembled by `tools/pioasm.py`, loaded by
       `tools/pio_host.py` -- see docs/info.md's "PIO" section and
       `CHANGES_feature6.md`. Built for the Jane Street protocol-emulator
@@ -318,7 +322,7 @@ src/
   pio.v, pio_sm.v, pio_fifo.v   PIO block: host registers/pins/IRQs, one state machine, FIFO
   config.json             LibreLane flow config (clock period, density, etc.)
 pio/
-  uart_tx.pio, uart_rx.pio, spi_master.pio, spi_cpha1.pio, i2c.pio   Pico SDK programs (i2c: side-set polarity swapped)
+  uart_tx.pio, uart_rx.pio, spi_master.pio, spi_cpha1.pio, spi_cpol1_cpha0.pio, spi_cpol1_cpha1.pio, i2c.pio   Pico SDK programs (i2c: side-set polarity swapped)
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you

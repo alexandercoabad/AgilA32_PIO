@@ -1,0 +1,18 @@
+; SPI master, mode 3 (CPOL=1, CPHA=1).
+; OUT/MOV pin = MOSI, side-set pin = SCK, IN pin = MISO. SCK = clk / (4 * CLKDIV).
+;
+; `spi_cpha1` with inverted side-set values, so SCK idles HIGH (the Pico SDK uses a
+; pad output override for CPOL=1; this block has none). Data changes on the
+; leading (FALLING) SCK edge and is sampled on the trailing (rising) edge.
+; Autopull/autopush 8 bits, shift left (MSB first).
+;
+; Before enabling the SM, SCK must already be high and the pad handed over only
+; then (force `set pins, 1 side 1` = 0xF001 with SET_BASE = SIDESET_BASE = SCK -- the side-set
+; bit of a forced instruction is bit 12, so plain 0xE001 would drive SCK low again --
+; then set PIN_OWN).
+.program spi_cpol1_cpha1
+.side_set 1
+
+    out x, 1    side 1     ; Stall here on empty (keep SCK idle high)
+    mov pins, x side 0 [1] ; Output data, SCK falls (mov pins uses OUT pins group)
+    in pins, 1  side 1     ; Input data, SCK rises

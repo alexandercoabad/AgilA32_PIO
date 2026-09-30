@@ -250,16 +250,23 @@ async def test_uart_loopback_two_state_machines(dut):
 
 
 # ============================================================================= SPI master
+SPI_PROGS = {0: "spi_master.pio", 1: "spi_cpha1.pio",
+             2: "spi_cpol1_cpha0.pio", 3: "spi_cpol1_cpha1.pio"}
+
+
 async def spi_run(dut, mode, tx, miso, div, bypass_miso=False):
     bus, world = await setup(dut)
-    prog = load_src("spi_master.pio" if mode == 0 else "spi_cpha1.pio")
+    prog = load_src(SPI_PROGS[mode])
     await bus.load_program(prog)
     await bus.sm_setup(0, prog, out_base=0, out_count=1, side_base=1, in_base=2,
+                       set_base=1, set_count=1,
                        autopull=True, pull_thresh=8, autopush=True, push_thresh=8,
                        out_right=False, in_right=False, div=div)
+    if mode >> 1:                                          # CPOL = 1: SCK must idle HIGH ...
+        await bus.force(0, 0xF001)                         # set pins, 1 side 1 (bit 12 = side-set value)
     slave = SpiSlave(mode, miso)
     world.devs.append(slave)
-    await bus.write(R_PIN_OWN, 0b011)                      # MOSI + SCK owned, MISO is an input
+    await bus.write(R_PIN_OWN, 0b011)                      # ... BEFORE the pad is handed to PIO
     if bypass_miso:
         await bus.write(R_SYNC_BYP, 1 << 2)
     await bus.set_enable(0)
@@ -272,6 +279,7 @@ async def spi_run(dut, mode, tx, miso, div, bypass_miso=False):
             got.append((await bus.rx_get(0)) & 0xFF)
         if len(got) == len(tx):
             break
+    await ClockCycles(dut.clk, 64)                         # let the trailing SCK edge / idle settle
     return slave, got
 
 
@@ -294,6 +302,63 @@ async def test_spi_mode1(dut):
     slave, got = await spi_run(dut, 1, tx, miso, (4, 0))
     assert slave.mosi_bytes == tx, [hex(b) for b in slave.mosi_bytes]
     assert got == miso, [hex(b) for b in got]
+
+
+def check_mosi_timing(slave, min_clocks=4):
+    """MOSI must be stable for at least one PIO tick (4 clocks at CLKDIV 1..4) before and after
+    every sampling edge. A slave model that samples in the same cycle MOSI changes would hide
+    a program whose data and clock edge coincide, so measure it explicitly."""
+    assert slave.setup and min(slave.setup) >= min_clocks, "setup %s" % slave.setup[:12]
+    assert slave.hold and min(slave.hold) >= min_clocks, "hold %s" % slave.hold[:12]
+
+
+def check_cpol1(slave, tx):
+    """CPOL = 1: SCK idles high before, between and after the transfer, and there is exactly
+    one falling + one rising edge per bit (no glitch when the pad is handed over)."""
+    assert slave.idle_sck == 1, "SCK was not high when the pad was handed to PIO"
+    assert slave.prev_sck == 1, "SCK did not return to idle-high after the last bit"
+    assert len(slave.fall_cycles) == 8 * len(tx), len(slave.fall_cycles)
+    assert len(slave.rise_cycles) == 8 * len(tx), len(slave.rise_cycles)
+    assert slave.fall_cycles[0] < slave.rise_cycles[0], "first edge must be the leading (falling) one"
+
+
+@cocotb.test()
+async def test_spi_mode2(dut):
+    """`spi_cpol1_cpha0` (CPOL = 1, CPHA = 0): SCK idles high, MISO is sampled on the falling
+    edge, MOSI changes on the rising edge; SCK period is exactly 4 * CLKDIV clocks."""
+    tx, miso = [0xA5, 0x3C, 0xFF, 0x00], [0xC3, 0x5A, 0x81, 0x7E]
+    slave, got = await spi_run(dut, 2, tx, miso, (4, 0))
+    assert slave.mosi_bytes == tx, [hex(b) for b in slave.mosi_bytes]
+    assert got == miso, [hex(b) for b in got]
+    check_cpol1(slave, tx)
+    check_mosi_timing(slave)
+    d = [b - a for a, b in zip(slave.fall_cycles, slave.fall_cycles[1:])]
+    assert set(d[:7]) == {16}, "SCK period should be 16 clocks, got %s" % d[:8]
+
+
+@cocotb.test()
+async def test_spi_mode3(dut):
+    """`spi_cpol1_cpha1` (CPOL = 1, CPHA = 1): SCK idles high, MOSI changes on the falling edge,
+    MISO is sampled on the rising edge."""
+    tx, miso = [0x96, 0x69, 0xF0, 0x0F], [0xA1, 0x1A, 0xFF, 0x00]
+    slave, got = await spi_run(dut, 3, tx, miso, (4, 0))
+    assert slave.mosi_bytes == tx, [hex(b) for b in slave.mosi_bytes]
+    assert got == miso, [hex(b) for b in got]
+    check_cpol1(slave, tx)
+    check_mosi_timing(slave)
+    d = [b - a for a, b in zip(slave.fall_cycles, slave.fall_cycles[1:])]
+    assert set(d[:7]) == {16}, "SCK period should be 16 clocks, got %s" % d[:8]
+
+
+@cocotb.test()
+async def test_spi_modes_0_and_1_idle_low(dut):
+    """Regression guard for the shared helper: CPOL = 0 modes still idle low and are unchanged."""
+    for mode in (0, 1):
+        tx, miso = [0x5A, 0xA5], [0x0F, 0xF0]
+        slave, got = await spi_run(dut, mode, tx, miso, (4, 0))
+        assert slave.idle_sck == 0 and slave.prev_sck == 0
+        assert slave.mosi_bytes == tx and got == miso, mode
+        check_mosi_timing(slave)
 
 
 @cocotb.test()

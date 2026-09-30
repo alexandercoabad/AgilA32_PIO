@@ -7,7 +7,7 @@
                (output); pins 8-9 are uio[4]/uio[5] (bidirectional, real output enable).
                Pins 8/9 are an open-drain wired-AND bus with a pull-up, so a slave can
                share them with the PIO.
-  * Peers    : SerialSource (UART/anything bit-banged in), SpiSlave (modes 0 and 1),
+  * Peers    : SerialSource (UART/anything bit-banged in), SpiSlave (modes 0-3),
                I2cSlave (start/stop/ack/read/clock-stretch, with protocol-rule checks).
 """
 import os
@@ -237,18 +237,33 @@ def decode_uart(trace, bit_clk, nframes=None, start_at=0):
 # ----------------------------------------------------------------------------- SPI slave
 class SpiSlave:
     """SPI slave on MOSI=pin0 (PIO out), SCK=pin1 (PIO out), MISO=pin2 (into the PIO).
-    mode 0: sample on rising SCK, shift on falling.  mode 1: shift on rising, sample on falling."""
+    mode = CPOL*2 + CPHA.
+      mode 0: idle low,  sample on rising SCK,  shift on falling.
+      mode 1: idle low,  shift on rising,       sample on falling.
+      mode 2: idle high, sample on falling SCK, shift on rising.
+      mode 3: idle high, shift on falling,      sample on rising.
+    With CPHA = 0 the first bit must already be valid before the first (leading) edge."""
 
     def __init__(self, mode, miso_bytes, mosi_pin=0, sck_pin=1, miso_pin=2):
+        assert mode in (0, 1, 2, 3)
         self.mode, self.miso_bytes = mode, list(miso_bytes)
+        self.cpol, self.cpha = mode >> 1, mode & 1
+        self.sample_rise = self.cpol == self.cpha
         self.mosi_pin, self.sck_pin, self.miso_pin = mosi_pin, sck_pin, miso_pin
         self.prev_sck = 0
+        self.idle_sck = None            # SCK level when the slave first looked (must equal CPOL)
         self.bit = 0
         self.bidx = 0
         self.shift = 0
         self.mosi_bytes = []
         self.rise_cycles = []
+        self.fall_cycles = []
         self.started = False
+        self.prev_mosi = None
+        self.last_mosi_change = None    # cycle of the most recent MOSI level change
+        self.last_sample = None         # cycle of the most recent sampling edge
+        self.setup = []                 # clocks MOSI was stable before each sampling edge
+        self.hold = []                  # clocks MOSI stayed stable after a sampling edge
 
     def _miso(self):
         if self.bidx < len(self.miso_bytes):
@@ -259,6 +274,9 @@ class SpiSlave:
         w.ext_in = (w.ext_in & ~(1 << self.miso_pin)) | (self._miso() << self.miso_pin)
 
     def _sample(self, w):
+        if self.last_mosi_change is not None:
+            self.setup.append(w.cycle - self.last_mosi_change)
+        self.last_sample = w.cycle
         self.shift = ((self.shift << 1) | ((w.pin_out >> self.mosi_pin) & 1)) & 0xFF
         self.bit += 1
         if self.bit == 8:
@@ -271,12 +289,21 @@ class SpiSlave:
         if not self.started:
             self.started = True
             self.prev_sck = sck
-            if self.mode == 0:
+            self.idle_sck = sck
+            if self.cpha == 0:
                 self._drive(w)                      # first bit must be valid before the first edge
         rise, fall = sck and not self.prev_sck, self.prev_sck and not sck
+        mosi = (w.pin_out >> self.mosi_pin) & 1
+        if self.prev_mosi is not None and mosi != self.prev_mosi:
+            self.last_mosi_change = w.cycle
+            if self.last_sample is not None:
+                self.hold.append(w.cycle - self.last_sample)
+        self.prev_mosi = mosi
         if rise:
             self.rise_cycles.append(w.cycle)
-        if self.mode == 0:
+        if fall:
+            self.fall_cycles.append(w.cycle)
+        if self.sample_rise:
             if rise:
                 self._sample(w)
             if fall:

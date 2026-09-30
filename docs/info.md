@@ -744,11 +744,11 @@ SCK period, SYNC_BYP behaviour), and `tb_pio_cpu_uart.v` (end-to-end:
 real CPU + flash image + PIO in the real top level, CPU halted while the
 last byte is still on the wire).
 
-**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 16 cocotb
+**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 19 cocotb
 tests drive `pio.v` over the same bus the CPU uses, against cycle-accurate peer models
 (`test/pio_tb_lib.py`): register/FIFO behaviour; UART TX at integer, fractional and
 averaged dividers, UART RX incl. framing error and baud tolerance, two-SM UART loopback;
-SPI master modes 0 and 1 (plus fast SCK with `SYNC_BYP`); and I2C write, read,
+SPI master modes 0-3 (plus fast SCK with `SYNC_BYP`; MOSI setup/hold measured); and I2C write, read,
 repeated-start register read, NAK -> IRQ 0, and clock stretching, with the slave model
 flagging any SDA change while SCL is high.
 
@@ -757,6 +757,31 @@ flagging any SDA change while SCL is high.
 `tools/pio_i2c.py` complements the pindir bits it sends (data, ACK slot, START/STOP).
 One bit is 32 PIO ticks, so SCL = clk / (32 * CLKDIV). `tools/sta.py` is a quick
 pre-layout register-to-register timing estimate from a Yosys JSON netlist and a liberty file.
+
+**SPI modes 2 and 3 (CPOL = 1).** `pio/spi_cpol1_cpha0.pio` (mode 2) and
+`pio/spi_cpol1_cpha1.pio` (mode 3) are `spi_cpha0` / `spi_cpha1` with the side-set values
+inverted, so SCK idles *high*. The Pico SDK gets CPOL = 1 by inverting the SCK pad with a GPIO
+output override; this block has no such override, so the program does it instead. Timing and
+wiring are otherwise identical to modes 0/1 (SCK = clk / (4 * CLKDIV), MOSI = OUT pin,
+SCK = side-set pin, MISO = IN pin, 8-bit autopull/autopush, MSB first). Mode 2 samples MISO on the
+falling edge and changes MOSI on the rising edge; mode 3 changes MOSI on the falling edge and
+samples on the rising edge.
+
+Handing SCK over to the PIO needs a specific order or the pad glitches (a spurious edge that a
+slave would count as a clock):
+1. Set SCK high in the CPU's own output register (`GPIO_OUT`, `0xF0`), because until `PIN_OWN` is set the
+   pad is driven from there, not from the PIO.
+2. Force `set pins, 1 side 1` (`0xF001`) with `SET_BASE = SIDESET_BASE = SCK`. The side-set value of a
+   forced instruction is bit 12, so the plain `set pins, 1` (`0xE001`) would drive SCK low again.
+3. Set the `PIN_OWN` bits (MOSI + SCK), then enable the state machine.
+
+`test_spi_mode2` / `test_spi_mode3` check the data both ways, that SCK is high when the pad is
+handed over, that there is exactly one falling and one rising edge per bit and SCK returns to
+idle-high after the last bit, that the SCK period is `4 * CLKDIV` clocks, and that MOSI is stable
+for at least one PIO tick before and after every sampling edge (a slave model that samples in the
+same cycle MOSI changes would otherwise hide a program whose data and clock edge coincide).
+These are `pio.v`-level tests; steps 1-3 above are documented but not yet exercised end to end
+through the CPU and the top-level pad mux.
 
 **CPU-driven I2C demo.** `tools/build_pio_i2c.py` builds a flash image in which the CPU loads
 `pio/i2c.pio`, starts SM0 (SDA = `uio[4]`, SCL = `uio[5]`, CLKDIV 32 = 1024 clk per SCL period),

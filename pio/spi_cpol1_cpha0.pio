@@ -1,0 +1,18 @@
+; SPI master, mode 2 (CPOL=1, CPHA=0).
+; OUT pin = MOSI, side-set pin = SCK, IN pin = MISO. SCK = clk / (4 * CLKDIV).
+;
+; The Pico SDK gets CPOL=1 by inverting the SCK pad (GPIO output override), which
+; this block does not have. Instead the side-set values are inverted, so SCK idles
+; HIGH: same two instructions as `spi_cpha0`, opposite SCK levels.
+; MOSI is presented while SCK is high (before the leading, FALLING edge); MISO is
+; sampled on that falling edge; MOSI changes on the trailing (rising) edge.
+;
+; Before enabling the SM, SCK must already be high and the pad handed over only
+; then (force `set pins, 1 side 1` = 0xF001 with SET_BASE = SIDESET_BASE = SCK -- the side-set
+; bit of a forced instruction is bit 12, so plain 0xE001 would drive SCK low again --
+; then set PIN_OWN), or the pad would glitch at hand-over. Autopull/autopush 8 bits, shift left (MSB first).
+.program spi_cpol1_cpha0
+.side_set 1
+
+    out pins, 1 side 1 [1]  ; present MOSI while SCK idles high (stalls here, high, when empty)
+    in  pins, 1 side 0 [1]  ; SCK falls (leading edge); sample MISO
