@@ -1025,6 +1025,97 @@ async def test_mm_clock_synchronisation_with_slower_master(dut):
     assert max(gaps[:8]) - min(gaps[:8]) <= 2, "SCL period must be stable: %s" % gaps[:8]
 
 
+async def mm_wait_model(dut, m2, limit=4000):
+    for _ in range(limit):
+        await ClockCycles(dut.clk, 1)
+        if m2.done:
+            break
+    await ClockCycles(dut.clk, 10)
+
+
+@cocotb.test()
+async def test_mm_identical_frames_neither_loses(dut):
+    """Two masters that send exactly the same frame never see a difference on the wire, so neither
+    may lose: no arbitration flag, the model does not lose either, and the slave sees ONE START and
+    one transaction with the right bytes (the textbook multi-master property).  Guards against a
+    false 'lost' when another master's SDA drive matches ours."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x12), ("write", 0x34), ("stop",)],
+                   join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x12, 0x34])) == "done"
+    await mm_wait_model(dut, m2)
+    assert m2.done and not m2.lost and m2.acks == [0, 0, 0], (m2.done, m2.lost, m2.acks)
+    assert slave.rx == [("A", 0xA0), ("D", 0x12), ("D", 0x34)], slave.rx
+    assert slave.starts == 1 and not slave.violations, (slave.starts, slave.violations)
+    assert (await bus.read(R_IRQ)) & 3 == 0, "no NAK / arbitration flag expected"
+    assert world.bus_trace[-1] == 0b11
+
+
+@cocotb.test()
+async def test_mm_pio_loses_on_the_last_bit_of_a_byte(dut):
+    """The two data bytes differ only in bit 0 (PIO 0x13, model 0x12): the loss is decided on the
+    LAST bit of the byte, right before the ACK slot.  The PIO must notice it, let go of both lines
+    at once and NOT clock an ACK slot of its own: the model's byte completes untouched, the slave
+    ACKs it (model sees ACK), and the slave data is 0x12."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x12), ("stop",)], join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x13])) == "lost"
+    await mm_wait_model(dut, m2)
+    assert m2.done and not m2.lost and m2.acks == [0, 0], (m2.done, m2.lost, m2.acks)
+    assert slave.rx == [("A", 0xA0), ("D", 0x12)], slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+    assert world.mlow == 0, "the loser must not be driving either line"
+
+
+@cocotb.test()
+async def test_mm_model_loses_on_the_last_bit_of_a_byte(dut):
+    """Mirror: PIO 0x12 vs model 0x13.  The PIO sends the 0 in bit 0 and wins; the model must lose
+    exactly there (byte 1, bit 7) and let go; the slave receives the PIO's 0x12."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x13), ("stop",)], join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x12])) == "done"
+    await mm_wait_model(dut, m2)
+    assert m2.lost and m2.lost_at == (1, 7), m2.lost_at
+    assert m2.low == 0
+    assert slave.rx == [("A", 0xA0), ("D", 0x12)], slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+    assert (await bus.read(R_IRQ)) & 3 == 0
+
+
+@cocotb.test()
+async def test_mm_read_versus_write_to_the_same_address(dut):
+    """Same address, different direction: the PIO READS (0xA1), the model WRITES (0xA0).  The R/W bit
+    is the last bit of the address byte; the PIO releases SDA for the 1 and the model drives the 0,
+    so the PIO loses.  Its flag is raised, it lets go, and the model's write completes (the slave
+    sees a WRITE of 0x5A, never a read)."""
+    slave = I2cSlave(addr=0x50, read_bytes=[0xEE])
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x5A), ("stop",)], join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.start() + mm.address(0x50, read=True)) == "lost"
+    await mm_wait_model(dut, m2)
+    assert m2.done and not m2.lost and m2.acks == [0, 0], (m2.done, m2.lost, m2.acks)
+    assert slave.rx == [("A", 0xA0), ("D", 0x5A)], slave.rx
+    assert world.mlow == 0 and not slave.violations, slave.violations
+
+
+@cocotb.test()
+async def test_mm_write_versus_read_to_the_same_address(dut):
+    """Mirror: the PIO WRITES (0xA0), the model READS (0xA1).  The PIO drives the 0 in the R/W bit,
+    so the MODEL loses there (address byte, bit 7) and lets go; the PIO's write completes."""
+    slave = I2cSlave(addr=0x50, read_bytes=[0xEE])
+    m2 = I2cMaster([("start",), ("write", 0xA1), ("read", False), ("stop",)], join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x77])) == "done"
+    await mm_wait_model(dut, m2)
+    assert m2.lost and m2.lost_at == (0, 7), m2.lost_at
+    assert m2.low == 0 and m2.reads == []
+    assert slave.rx == [("A", 0xA0), ("D", 0x77)], slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+
+
 # ============================================================================= I2C slave
 async def slave_setup(dut, slave, master):
     bus, world = await setup(dut)
