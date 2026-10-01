@@ -28,16 +28,5 @@ together. The merged suite was run in full: 48 of 48 pass, including all USB tes
   (write pointer, repeated START, read) is not possible without reloading in between.
 
 ## Not done
-Gate-level simulation of these tests; re-running CI with
+CPU-driven end-to-end demo of the slaves; gate-level simulation of these tests; re-running CI with
 this feature (no RTL changed, so the layout should be identical).
-
-## Addendum: CPU-driven slave demo
-- `tools/build_pio_i2c_slave.py`, `test/tb_pio_cpu_i2c_slave.v`, `test/pio_i2c_slave_flash_image.hex`
-  (1980 bytes, 45 pages); `make standalone-tests` runs it.
-- `tools/pio_host.py` gained `wait_rx_ready`, `rx_get`, `byte_plus1_to_i2c_slave_word`, `write_data_reg`
-  (RX-FIFO polling loop and the small ALU sequence the CPU needs between the phases).
-- Flow: master writes A5 3C -> RX slave (PIO alone) -> CPU pops both, adds 1, swaps in the TX slave,
-  halts -> master reads A6 3D. All bench checks pass; mutation-checked (CPU adds 2 -> `a7 3e`, FAIL).
-- One thing worth knowing: PIO pin directions are sticky when a state machine is disabled, so the
-  switch forces `set pindirs, 0` before the pads change program, and waits 6000 clocks first so the
-  master's last ACK and STOP are over (a disabled SM would otherwise leave SDA driven low).

@@ -278,6 +278,42 @@ class PioHost:
         a.ADDI(self.TMP, self.TMP, -1)
         a.BNE(self.TMP, 0, lbl)
 
+    def wait_rx_ready(self, sm):
+        """Spin until RX FIFO `sm` holds a word (FSTAT.RXEMPTY[sm] == 0). One atomic page op;
+        leaves PIO_IDX pointing at FSTAT. Uses x6/x7."""
+        self._reserve(self._li_bytes(R_FSTAT) + 4 + 4 * 4)
+        self._li(self.TMP, R_FSTAT)
+        a = self.p.page
+        a.SW(self.TMP, 0, PIO_IDX)
+        self._rxw_n = getattr(self, "_rxw_n", 0) + 1
+        lbl = "rxw%d" % self._rxw_n
+        a.ADDI(6, 0, 1 << (8 + sm))                  # mask = RXEMPTY[sm]
+        a.label(lbl)
+        a.LW(7, 0, PIO_DATA)
+        a.AND(7, 7, 6)
+        a.BNE(7, 0, lbl)
+
+    def rx_get(self, sm, rd):
+        """LW rd <- RX FIFO of `sm` (pops one word)."""
+        self.write_idx(sm_reg(sm, SM_RXF))
+        self.read_data(rd)
+
+    def byte_plus1_to_i2c_slave_word(self, rd):
+        """rd = RX word (byte in bits [7:0]) -> TX word that makes the I2C-slave program send
+        (byte + 1): ((~(byte + 1)) & 0xFF) << 24  (PINDIR polarity, see pio_i2c_slave.tx_word)."""
+        self._reserve(5 * 4)
+        a = self.p.page
+        a.ANDI(rd, rd, 0xFF)
+        a.ADDI(rd, rd, 1)
+        a.XORI(rd, rd, -1)
+        a.ANDI(rd, rd, 0xFF)
+        a.SLLI(rd, rd, 24)
+
+    def write_data_reg(self, rs):
+        """SW rs -> PIO_DATA (the register picked by the last write_idx)."""
+        self._reserve(4)
+        self.p.page.SW(rs, 0, PIO_DATA)
+
     def write_gpio_out(self, reg, addr=0xF0):
         """SB reg -> LED_OUT (0xF0)."""
         self._reserve(4)

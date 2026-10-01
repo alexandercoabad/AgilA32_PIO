@@ -954,9 +954,19 @@ CLKDIV 1 an SCL period of 16 or 24 clocks is too fast (the master sees no ACK at
 is the first that works; use 40 or more. *No combined slave:* a real sensor or EEPROM (write the
 register pointer, repeated START, read) needs both directions in one device, but the two programs use
 29 + 32 words of a 32-word instruction memory shared by all state machines, so they can only be
-swapped at run time, not run together. *Not done:* a CPU-driven end-to-end demo for the slave
-programs and a gate-level run of these tests.
+swapped at run time, not run together. *Not done:* a gate-level run of these tests.
 
 **Tests** (`test_pio_protocols.py`, 48 in all): 5 multi-master, 9 slave, plus
 `test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table. Models: `I2cMaster`, `I2cMM`,
 `I2cSlaveRx`, `I2cSlaveTx` in `pio_tb_lib.py` / the helper modules.
+
+**CPU-driven slave demo.** `tools/build_pio_i2c_slave.py` + `test/tb_pio_cpu_i2c_slave.v`, one flash
+image, one state machine, an external I2C master (the bench, SCL period 128 clocks). *Phase 1:* the CPU
+loads `i2c_slave_rx` (address 0x42, 2 bytes), enables it and spins on `FSTAT.RXEMPTY`
+(`PioHost.wait_rx_ready`); the master writes `A5 3C`, the PIO does every bit, the CPU pops both bytes.
+*Phase 2:* after a delay for the master's STOP, the CPU computes byte + 1 in three RV32I instructions
+each, wipes the state machine (disable, restart, FIFO clear, SDA released), loads `i2c_slave_tx`,
+queues the two words and executes `EBREAK`. The master then reads two bytes and gets `A6 3D` with the
+core halted. It exercises exactly the thing a combined slave would need and cannot have at 29 + 32
+words: the CPU does the bookkeeping between two direction-specific programs. Mutation check: making
+the CPU add 2 instead of 1 fails the bench (`read back a7 3e`).
