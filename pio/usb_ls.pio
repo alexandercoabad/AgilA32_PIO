@@ -1,0 +1,60 @@
+; Low-speed USB (1.5 Mb/s) HOST transaction engine: send one packet, then listen for the reply.
+;
+; Pins: D+ = PIO pin 8 (uio[4]), D- = PIO pin 9 (uio[5]);  OUT / SET / IN base = 8, count 2.
+; Clock: 8 PIO ticks per USB bit. At clk = 24 MHz, CLKDIV = 2 gives a 12 MHz tick = 1.5 Mb/s.
+; Shift config: autopull 32 (shift RIGHT, LSB first), autopush 32 (shift LEFT, first bit = MSB).
+;
+; ---- TX (entry `tx_start`) ------------------------------------------------------------
+; FIFO word 0 = (number of bits - 1); then the packet's bits, LSB first, 32 per word.
+; The bits are the *logical* bits after bit stuffing (sync included); this program does the
+; NRZI encoding (0 = toggle line state, 1 = keep) and the EOP: SE0 x 2 bits, J x 1 bit, release.
+; Line state lives in ISR: J (idle) = 0b10 (D-=1, D+=0), K = 0b01.
+;
+; ---- RX (entry `rx_start`, also reached automatically after TX) -------------------------
+; Waits for the first K (start of SYNC), samples both lines mid-bit every 8 ticks, NRZI-decodes
+; (line state unchanged -> 1, changed -> 0) and shifts the data bits in. SE0 = end of packet:
+; it pushes the last partial word (right-aligned, zero padded on the left). The exact length is
+; recovered by the host from SYNC + PID check + CRC (tools/pio_usb.py), which also undoes the
+; bit stuffing. (A first version appended a 0 11111111 terminator with `in y, 8`; that loses bits
+; when the 8 ones straddle a word boundary, because autopush discards what does not fit.)  Receive tolerance: the sample point is fixed after
+; the first edge (no per-transition resync), so ~+-0.5% clock error is comfortable.
+.program usb_ls
+
+public tx_start:
+    pull block                 ; word 0: nbits-1
+    out x, 32
+    set y, 2
+    mov isr, y                 ; line state = J
+    set pins, 2                ; J on the output register while still hi-Z (no glitch)
+    set pindirs, 3             ; drive D+ and D-
+bitloop:
+    out y, 1                   ; t0  next data bit
+    jmp !y tog                 ; t1  0 -> toggle
+    jmp emit                   ; t2  1 -> keep (same 4 ticks either way)
+tog:
+    mov isr, ~isr              ; t2
+emit:
+    mov pins, isr [3]          ; t3..t6  drive the line, 8 ticks per bit in total
+    jmp x-- bitloop            ; t7
+    nop [2]                    ; the last bit's level began at t3, so hold it 3 more ticks (8 in all)
+    set pins, 0 [15]           ; EOP: SE0 for 2 bit times
+    set pins, 2 [7]            ; then J for 1 bit time
+    set pindirs, 0             ; release the bus (pull-up/pull-down define idle J)
+
+public rx_start:
+    set x, 2                   ; previous line state = J
+    wait 1 pin 0 [3]           ; first K = start of SYNC; the +3 ticks put every sample ~9 of 16 clocks into its bit
+rx_bit:
+    mov osr, pins              ; sample {D-, D+}
+    out y, 2                   ; y: J = 2, K = 1, SE0 = 0
+    jmp x!=y differ
+    set y, 1                   ; same level -> data bit 1
+    in y, 1 [2]
+    jmp rx_bit
+differ:
+    jmp !y eop                 ; SE0 -> end of packet
+    mov x, y                   ; changed level -> data bit 0
+    in null, 1 [1]
+    jmp rx_bit
+eop:
+    push                       ; flush the partial word, then wrap back to tx_start

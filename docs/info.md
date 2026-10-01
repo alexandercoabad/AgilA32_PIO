@@ -875,3 +875,52 @@ device commands (LED set, reset), which need CLOCK/DATA driven open-drain on the
 instead of the read-only `ui_in[3]` / `ui_in[4]`; inhibiting the keyboard by holding CLOCK low for flow
 control (same requirement); anything on a real keyboard. The modeled keyboard is my reading of the PS/2
 timing, not a measured device.
+
+#### Low-speed USB host engine (`pio/usb_ls.pio`)
+
+One state machine, 29 of the 32 shared instruction words, no RTL change. D+ = PIO pin 8 (`uio[4]`),
+D- = PIO pin 9 (`uio[5]`); both are bidirectional, and PINDIR is the real output enable, so the
+bus is released (idle J from the external pull-up on D- and the host pull-downs) whenever the engine
+is not transmitting. Clock: 8 PIO ticks per bit, so **24 MHz core clock and CLKDIV 2 give exactly
+1.5 Mb/s** (12 MHz tick); this is why `info.yaml` / `src/config.json` now say 24 MHz (41.667 ns).
+The first GDS run, at a relaxed 1 MHz target, reported a register-to-register limit of 21.5 ns
+(46.5 MHz) in the slow corner, so 24 MHz leaves about 1.9x margin -- to be confirmed by re-running
+the flow at the new period.
+
+*TX* (`tx_start`): FIFO word 0 = number of bits - 1, then the packet's bits LSB first, 32 per word.
+The bits are the **logical, already bit-stuffed** bits including SYNC (`tools/pio_usb.py` builds
+tokens, DATA0/1 and handshakes, with CRC5 and CRC16 checked against known USB vectors); PIO does
+the NRZI encoding (0 = toggle, line state kept in ISR) and the EOP (SE0 for 2 bit times, J for 1,
+release). *RX* (`rx_start`, entered automatically after TX): waits for the first K, samples both
+lines every 8 ticks, NRZI-decodes, shifts bits in (first bit = MSB of word 0), and at SE0 pushes
+the last partial word. The host (`pio_usb.decode_rx`) finds the exact length from SYNC, the PID
+check and the CRC, and removes the stuffing. The TX-to-RX flip is in the PIO program, so the
+device's reply (a few hundred clocks after the token's EOP) is caught with the CPU parked --
+one flash-page switch of the CPU costs about 3000 clocks.
+
+**Limits, measured and not hidden**
+- *Receive clock tolerance is narrow.* The sample point is fixed after the first edge (there is no
+  instruction left for per-transition resync). Against a device model whose bit clock is off by
+  +-x %, an 8-byte DATA1 decodes for **-0.5 % < x < +0.8 %**; handshakes and short packets tolerate
+  more. The USB spec allows +-1.5 % for a low-speed device, so a device with an RC oscillator can
+  fail on long packets; crystal and resonator devices are fine. Per-transition resync is the
+  obvious next step.
+- *TX is FIFO-sized.* The 4-deep TX FIFO holds the count word plus 3 data words = 96 bits. A token
+  (32 bits) and a handshake always fit; a DATA packet with more than about 5 payload bytes needs the
+  CPU to push a word within ~1500 clocks of starting (one page switch is ~3000), or a deeper TX
+  FIFO. So a full control transfer (SETUP token + 8-byte DATA0 back to back) is **not** possible
+  from CPU firmware as is; IN/OUT tokens, handshakes and short data are.
+- *RX is FIFO-sized too.* The worst-case 8-byte DATA packet (96 raw bits + stuffing) takes 4 words
+  (128 bits) -- exactly the RX FIFO depth.
+- *Electrical.* Nothing was measured; low-speed signalling is 3.3 V, so check the pad supply, add
+  the 1.5 kohm pull-up (device role) or 15 kohm pull-downs (host role) and the series resistors on
+  the board. Only the host-side engine exists; device-side response timing (7.5 bit times) was not
+  attempted.
+
+**Tests.** `test_pio_protocols.py` (+7): token waveform (every edge on a 16-clock boundary, SE0
+exactly 32 clocks), DATA1 with 8 x 0xFF (maximum stuffing, no level longer than 7 bits), IN -> DATA1
+turnaround, NAK, receiver alone (`rx_start`), 12 random packets, clock-error sweep. Model:
+`UsbLsDevice` in `pio_tb_lib.py` (push-pull D+/D- with pull-down/pull-up idle, bit clock scalable).
+`tb_pio_cpu_usb.v` runs the CPU image from `tools/build_pio_usb.py` end to end: token received
+bit-for-bit by a Verilog device, the 4 RX words match, and the core had halted before the device
+replied.

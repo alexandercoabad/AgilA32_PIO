@@ -17,12 +17,12 @@
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
-  "//": "Set to 1000ns (1MHz) to match info.yaml's clock_hz. This core has a fairly",
-  "//": "wide combinational cone (32-bit ALU + ROM lookup + branch compare all in one",
-  "//": "cycle), so it's given generous timing margin rather than chasing 50MHz on a",
-  "//": "first submission. Tighten this later once you've confirmed how much slack",
-  "//": "LibreLane actually reports.",
-  "CLOCK_PERIOD": 1000,
+  "//": "Set to 41.667ns (24MHz) to match info.yaml's clock_hz: exactly 2x the 12MHz PIO tick",
+  "//": "that low-speed USB needs (CLKDIV 2 -> 8 ticks per 1.5Mb/s bit). The first GDS run",
+  "//": "was done at 1000ns and reported a reg-to-reg limit of 21.5ns (46.5MHz) in the",
+  "//": "slow corner (1.08V/125C), so 41.667ns leaves about 1.9x margin. Raise later if",
+  "//": "the flow reports comfortable slack.",
+  "CLOCK_PERIOD": 41.667,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,

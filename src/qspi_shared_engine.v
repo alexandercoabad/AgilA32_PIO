@@ -43,7 +43,7 @@
 // logic here because the CPU's own FSM only ever has one outstanding
 // access.
 //
-// SCK is generated at clk/2 (500 kHz at a 1 MHz system clock, well
+// SCK is generated at clk/2 (500 kHz at a 1 MHz system clock, 12 MHz at 24 MHz, well
 // inside both chips' timing budget), SPI mode 0: MOSI changes on the
 // SCK falling edge (held stable through the whole low half), MISO is
 // sampled on the SCK rising edge.

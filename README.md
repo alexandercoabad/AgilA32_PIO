@@ -17,7 +17,7 @@ from-scratch RISC-V core is where this whole line of projects started.
 **Test counts** (all run by `make` in `test/`): **26 cocotb protocol tests**
 (`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 8 PIO Verilog
 testbenches**: 5 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
-`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`) and 3 that
+`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`) and 3 that
 drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 
 | Protocol | Runs on | Status | Verified by |
@@ -34,7 +34,8 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 | PS/2 keyboard receiver | PIO (`ps2_rx`, own state machine) | Done at the `pio.v` level (not yet CPU-driven end to end) | 7 cocotb tests against a PS/2 keyboard model: keystroke traffic incl. extended keys, 10 and 16.7 kHz CLOCK, 4-frame FIFO burst while the CPU is busy, FIFO overflow + recovery, idle-timeout resync after a partial frame, bad parity / stop bit reported to the CPU, and running next to an SPI master on another state machine |
 | SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
 | SWD, CAN | PIO | Not attempted | -- |
-| Low-speed USB, 10BASE-T (brief's stretch goals) | PIO | Not attempted | -- |
+| Low-speed USB host engine (1.5 Mb/s: token/data TX with NRZI + bit stuffing + EOP, reply RX) | PIO (`usb_ls`, 29 of 32 instruction words, one state machine) | Done in simulation at 24 MHz (CLKDIV 2); receive clock tolerance only about -0.5 % to +0.8 % (see below) | 7 cocotb tests against a low-speed device model (token waveform edge-by-edge, max-stuffing DATA1, IN -> DATA1 turnaround, NAK, receiver alone, 12-packet fuzz, clock-error sweep) + `tb_pio_cpu_usb.v` (CPU queues an IN token and halts; PIO sends it, turns the bus around and captures the 8-byte reply) |
+| 10BASE-T (brief's stretch goal) | PIO | Not attempted: needs a frame buffer (a 4-deep FIFO holds 128 of ~576 bits; the CPU manages one word per ~3000 clocks), at least 40 MHz, and external magnetics | -- |
 
 All results above are from simulation (RTL and gate-level). Nothing has been
 measured on silicon yet.
