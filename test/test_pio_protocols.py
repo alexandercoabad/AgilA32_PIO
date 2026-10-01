@@ -15,6 +15,7 @@ from cocotb.triggers import ClockCycles, RisingEdge
 
 from pio_tb_lib import *            # noqa: F401,F403
 import pio_i2c
+import pio_usb
 from pio_tb_lib import I2cMaster
 from pio_i2c_slave import (I2cSlaveRx, I2cSlaveTx, PIN_OWN_MASK as SL_OWN, INIT_INSTRS as SL_INIT, tx_word)
 from pio_i2c_mm import (I2cMM, SM_CONFIG as MM_CONFIG, PIN_OWN_MASK as MM_OWN, IRQ_LOST, IRQ_NAK,
@@ -683,6 +684,178 @@ async def test_ps2_rx_runs_alongside_spi_master(dut):
     assert [d for d, _ in got] == keys and all(ok for _, ok in got), got
     assert probe.both > 500, "SPI and PS/2 did not overlap in time (%d SCK edges)" % probe.both
 
+
+# ============================================================================= low-speed USB
+USB_DIV = (2, 0)                # 8 ticks/bit x CLKDIV 2 = 16 clk/bit (24 MHz core -> 1.5 Mb/s)
+
+
+async def usb_setup(dut, device, entry="tx_start", ctx=None):
+    """Bring up SM0 with usb_ls.pio. Pass the (bus, world) of an earlier call as `ctx` to reuse the
+    clock and pad model (tests that loop must not start a second clock / World); the state machine
+    is then restarted and the new device replaces the old one."""
+    if ctx is None:
+        bus, world = await setup(dut)
+    else:
+        bus, world = ctx
+        await bus.write(R_CTRL, (1 << 4) | (1 << 8) | (1 << 12))          # disable + restart + FIFO clear
+        bus.en_mask = 0
+        world.devs[:] = []
+        world.ext_high = world.ext_low = 0
+        await ClockCycles(dut.clk, 40)
+    world.pull = 0x200                                     # D+ pulled down, D- pulled up: idle = J
+    device.spont = [(c + world.cycle, bits) for c, bits in device.spont]   # times are relative
+    prog = load_src("usb_ls.pio")
+    await bus.load_program(prog)
+    await bus.sm_setup(0, prog, out_base=8, out_count=2, set_base=8, set_count=2, in_base=8,
+                       autopull=True, autopush=True, in_right=False, out_right=True,
+                       div=USB_DIV, entry=prog.labels[entry] + prog.origin)
+    world.devs.append(device)
+    await bus.write(R_PIN_OWN, 0x300)                      # D+/D- = PIO pins 8/9, PINDIR = 0 (released)
+    await bus.set_enable(0)
+    return bus, world, prog
+
+
+async def usb_send(bus, bits):
+    for w in pio_usb.tx_words(bits):
+        await bus.tx_put_blocking(0, w)
+
+
+async def usb_collect(dut, bus, idle=900, first=4000):
+    """Wait up to `first` clocks for the first RX word, then drain until quiet for `idle` clocks.
+    (A 32-bit word takes 32 x 16 = 512 clocks to arrive, so `idle` must exceed that.)"""
+    words, quiet, waited = [], 0, 0
+    while True:
+        if await bus.rx_level(0):
+            words.append(await bus.rx_get(0))
+            quiet = 0
+            continue
+        await ClockCycles(dut.clk, 8)
+        if words:
+            quiet += 8
+            if quiet >= idle:
+                return words
+        else:
+            waited += 8
+            if waited >= first:
+                return words
+
+
+@cocotb.test()
+async def test_usb_ls_tx_token_waveform(dut):
+    """SETUP token: the device sees exactly the intended stuffed bit stream (NRZI decoded at bit
+    centres), every line edge lies on a 16-clock bit boundary, EOP = SE0 for 32 clocks then J."""
+    dev = UsbLsDevice()
+    bus, world, prog = await usb_setup(dut, dev)
+    bits = pio_usb.token_bits(pio_usb.SETUP, 5, 0)
+    await usb_send(bus, bits)
+    await ClockCycles(dut.clk, (len(bits) + 6) * 16 + 200)
+    assert len(dev.rx_packets) == 1, dev.rx_packets
+    pkt = dev.rx_packets[0]
+    assert pkt["bits"] == bits, (pkt["bits"], bits)
+    r = pio_usb.parse(pkt["bits"])
+    assert r["name"] == "SETUP" and r["ok"] and (r["addr"], r["endp"]) == (5, 0), r
+    edges = [(c, lv) for c, lv in dev.edges if pkt["start"] <= c <= pkt["se0_start"] + 40]
+    for (c0, _), (c1, _) in zip(edges, edges[1:]):
+        assert (c1 - c0) % 16 == 0, "edge spacing %d is not a multiple of 16 clocks" % (c1 - c0)
+    se0 = [i for i, (c, lv) in enumerate(edges) if lv == (0, 0)]
+    assert len(se0) == 1 and edges[se0[0] + 1][1] == (0, 1), edges[-4:]
+    assert edges[se0[0] + 1][0] - edges[se0[0]][0] == 32, "SE0 must last exactly 2 bit times"
+
+
+@cocotb.test()
+async def test_usb_ls_tx_data_with_bit_stuffing(dut):
+    """DATA1 with 8 x 0xFF (maximum stuffing): the device recovers payload and CRC16, and the
+    line never stays in one state for more than 7 bit times."""
+    dev = UsbLsDevice()
+    bus, world, prog = await usb_setup(dut, dev)
+    payload = [0xFF] * 8
+    bits = pio_usb.data_bits(pio_usb.DATA1, payload)
+    assert len(bits) > 96             # stuffing really adds bits (96 raw bits)
+    await usb_send(bus, bits)
+    await ClockCycles(dut.clk, (len(bits) + 6) * 16 + 300)
+    r = pio_usb.parse(dev.rx_packets[0]["bits"])
+    assert r["name"] == "DATA1" and r["payload"] == payload and r["ok"], r
+    runs = [(b - a) for (a, _), (b, _) in zip(dev.edges, dev.edges[1:])]
+    assert max(runs[:-2]) <= 7 * 16, "a level lasted %d clocks (> 7 bit times)" % max(runs)
+
+
+@cocotb.test()
+async def test_usb_ls_in_transaction(dut):
+    """Host sends IN addr 5 ep 1; the device answers DATA1 (8 bytes, several stuffed bits) after a
+    short turnaround. The same state machine flips from TX to RX on its own (no CPU), and the
+    host recovers payload + CRC from the RX FIFO."""
+    payload = [0xFF, 0x00, 0xFF, 0xFF, 0x3F, 0xFC, 0x81, 0xFF]
+    dev = UsbLsDevice(responses=[pio_usb.data_bits(pio_usb.DATA1, payload)], turnaround=24)
+    bus, world, prog = await usb_setup(dut, dev)
+    await usb_send(bus, pio_usb.token_bits(pio_usb.IN, 5, 1))
+    words = await usb_collect(dut, bus)
+    r = pio_usb.decode_rx(words)
+    assert r["name"] == "DATA1" and r["payload"] == payload and r["ok"], (r, [hex(w) for w in words])
+    tok = pio_usb.parse(dev.rx_packets[0]["bits"])
+    assert tok["name"] == "IN" and tok["ok"] and (tok["addr"], tok["endp"]) == (5, 1), tok
+    assert len(words) <= 4, "response must fit the 4-deep RX FIFO"
+
+
+@cocotb.test()
+async def test_usb_ls_handshakes_nak_and_ack(dut):
+    """Short packets (PID only) must decode too: NAK in answer to an IN token."""
+    dev = UsbLsDevice(responses=[pio_usb.handshake_bits(pio_usb.NAK)])
+    bus, world, prog = await usb_setup(dut, dev)
+    await usb_send(bus, pio_usb.token_bits(pio_usb.IN, 3, 0))
+    r = pio_usb.decode_rx(await usb_collect(dut, bus))
+    assert r["name"] == "NAK" and r["ok"], r
+
+
+@cocotb.test()
+async def test_usb_ls_rx_only_entry(dut):
+    """Receiver on its own (entry = rx_start): a device that speaks first - ACK then a DATA0 with a
+    zero-length payload - is received in order, one packet per RX burst."""
+    dev = UsbLsDevice(spontaneous=[(900, pio_usb.handshake_bits(pio_usb.ACK))])
+    bus, world, prog = await usb_setup(dut, dev, entry="rx_start")
+    r = pio_usb.decode_rx(await usb_collect(dut, bus))
+    assert r["name"] == "ACK" and r["ok"], r
+
+
+@cocotb.test()
+async def test_usb_ls_rx_random_payloads(dut):
+    """Fuzz the receiver: 12 random DATA packets of 0..8 bytes, restarting the SM each time."""
+    rnd = random.Random(2024)
+    ctx = None
+    for n in range(12):
+        payload = [rnd.randrange(256) for _ in range(rnd.randrange(9))]
+        pid = pio_usb.DATA0 if n % 2 == 0 else pio_usb.DATA1
+        dev = UsbLsDevice(spontaneous=[(700, pio_usb.data_bits(pid, payload))])
+        bus, world, prog = await usb_setup(dut, dev, entry="rx_start", ctx=ctx)
+        ctx = (bus, world)
+        words = await usb_collect(dut, bus)
+        r = pio_usb.decode_rx(words)
+        assert r["payload"] == payload and r["pid"] == pid and r["ok"], (n, payload, r)
+
+
+@cocotb.test()
+async def test_usb_ls_rx_clock_tolerance(dut):
+    """Receiver vs a device whose bit clock is off by +-x %: report the window and require +-0.25 %.
+    The sample point is fixed after the first edge (no per-transition resync: all 32 instruction
+    words are in use), so a full 8-byte packet (up to ~112 bit times) has about +-0.45 % of margin;
+    a real low-speed device is allowed +-1.5 % by the USB spec -- see docs/info.md."""
+    payload = [0xA5, 0x5A, 0xFF, 0x00, 0x96, 0x69, 0xC3, 0x3C]
+    results = {}
+    ctx = None
+    for pct in (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0):
+        dev = UsbLsDevice(spontaneous=[(700, pio_usb.data_bits(pio_usb.DATA1, payload))],
+                          scale=1 + pct / 100.0)
+        bus, world, prog = await usb_setup(dut, dev, entry="rx_start", ctx=ctx)
+        ctx = (bus, world)
+        words = await usb_collect(dut, bus)
+        try:
+            r = pio_usb.decode_rx(words)
+            results[pct] = r["ok"] and r["payload"] == payload
+        except ValueError:
+            results[pct] = False
+    dut._log.info("USB LS RX clock tolerance (8-byte DATA1): %s" % {
+        "%+.1f%%" % k: ("ok" if v else "FAIL") for k, v in results.items()})
+    for pct in (-0.25, 0.0, 0.25):
+        assert results[pct], "receiver must tolerate %+.2f %% bit-clock error" % pct
 
 # ============================================================================= I2C multi-master
 def scl_period_and_high(slave):

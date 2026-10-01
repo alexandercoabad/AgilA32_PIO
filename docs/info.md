@@ -924,3 +924,39 @@ turnaround, NAK, receiver alone (`rx_start`), 12 random packets, clock-error swe
 `tb_pio_cpu_usb.v` runs the CPU image from `tools/build_pio_usb.py` end to end: token received
 bit-for-bit by a Verilog device, the 4 RX words match, and the core had halted before the device
 replied.
+
+#### I2C slave and multi-master (feature 13)
+
+Three more programs for the same state machines, no RTL change. All use SDA = PIO pin 8 (`uio[4]`),
+SCL = PIO pin 9 (`uio[5]`), and the same PINDIR convention as `i2c.pio` (PINDIR = 1 pulls the line
+low). Host-side helpers: `tools/pio_i2c_slave.py`, `tools/pio_i2c_mm.py`.
+
+- **`pio/i2c_slave_rx.pio` (29 words), master writes to us.** START detect, 7-bit address compare
+  (address held in Y), ACK, then exactly `WRITE_BYTES` data bytes, each ACKed and pushed to the RX
+  FIFO (mask the word with 0xFF). A read request or another address is not ACKed. **Bounded on
+  purpose**: while waiting for a data bit a PIO state machine cannot notice a STOP/START (there is no
+  asynchronous branch), so a master that ends a write early would leave it out of step; fixing the
+  length at assembly time avoids that. The OSR is used as a hardware bit counter.
+- **`pio/i2c_slave_tx.pio` (32 words), master reads from us.** Address match, ACK, then bytes from
+  the TX FIFO until the master NAKs. If the FIFO is empty when a byte is due, the state machine **holds
+  SCL low** (side-set on the blocking `pull`) until the host supplies it: clock stretching with the CPU
+  as slow as it likes (tested with 3000 clocks). Data words: `(~byte & 0xFF) << 24`.
+- **`pio/i2c_mm.pio` (27 words), multi-master master.** The SDK program's structure plus bit-level
+  arbitration: each data bit is carried twice in the FIFO word, a *drive* copy for `out pindirs` and a
+  *tolerate-low* copy in X (forced to 1 for read bits), so releasing SDA for a 1 and reading 0 means
+  "lost" only for write bits. On loss it lets go of SDA and SCL at once (IRQ 1) so the winner's byte is
+  untouched; a NAK raises IRQ 0. After either IRQ the host must clear the FIFO, restart the SM and
+  jump to `entry_point`. SCL high is held off until the wired-AND SCL is really high (clock
+  synchronisation with slower masters). One SCL period = 32 PIO ticks (33 at CLKDIV 1).
+
+**Limits.** *Speed:* the slaves need about 12 ticks after the 8th SCL fall to drive the ACK, so at
+CLKDIV 1 an SCL period of 16 or 24 clocks is too fast (the master sees no ACK at the rising edge), 32
+is the first that works; use 40 or more. *No combined slave:* a real sensor or EEPROM (write the
+register pointer, repeated START, read) needs both directions in one device, but the two programs use
+29 + 32 words of a 32-word instruction memory shared by all state machines, so they can only be
+swapped at run time, not run together. *Not done:* a CPU-driven end-to-end demo for the slave
+programs and a gate-level run of these tests.
+
+**Tests** (`test_pio_protocols.py`, 48 in all): 5 multi-master, 9 slave, plus
+`test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table. Models: `I2cMaster`, `I2cMM`,
+`I2cSlaveRx`, `I2cSlaveTx` in `pio_tb_lib.py` / the helper modules.

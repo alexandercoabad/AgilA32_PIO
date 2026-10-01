@@ -8,7 +8,7 @@
 Why two programs: a combined slave does not fit.  The state machines share ONE 32-word instruction
 memory and each program here already uses 29 and 32 words.  Load whichever direction the device needs
 (or reload at run time, as the CPU demos do).  The per-direction register-file pattern of a real
-sensor/EEPROM (write pointer, then repeated START + read) needs both directions; see CHANGES_feature11.md.
+sensor/EEPROM (write pointer, then repeated START + read) needs both directions; see CHANGES_feature13.md.
 
 Both programs: SDA = pad 8 (IN/OUT/SET base), SCL = pad 9 (JMP_PIN; SIDE-SET base in the TX program);
 IN/OUT shift left; no autopush/autopull; PULL threshold 8 (the OSR is the hardware bit counter).

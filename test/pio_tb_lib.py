@@ -128,7 +128,10 @@ class World:
     def __init__(self, dut):
         self.d = dut
         self.ext_in = 0x000          # value driven onto pads 0-7 by the outside world
-        self.ext_low = 0x000         # open-drain pull-downs by external devices (pads 8/9)
+        self.ext_low = 0x000         # external devices pulling pads 8/9 low
+        self.ext_high = 0x000        # external devices driving pads 8/9 high (push-pull, e.g. USB)
+        self.pull = 0x300            # idle level of pads 8/9 when nobody drives (I2C: both pulled up;
+                                     # low-speed USB: D+ pulled down, D- pulled up -> 0x200)
         self.devs = []
         self.cycle = 0
         self.pin_out = self.pin_dir = self.own = 0
@@ -138,7 +141,10 @@ class World:
         self.irq_seen = 0
 
     def resolve(self):
-        return 0x300 & ~(self.mlow | self.ext_low)
+        drv = self.own & self.pin_dir & 0x300                  # pads the PIO actually drives
+        val = (self.pull & ~drv) | (self.pin_out & drv)        # PINDIR = 1 drives the pin_out value
+        val = (val | self.ext_high) & ~self.ext_low
+        return val & 0x300
 
     def pins_raw(self):
         return (self.ext_in & 0xFF) | self.resolve()
@@ -501,6 +507,110 @@ class I2cSlave:
                     self.mode, self.sda_low = "ignore", 0
 
 
+# ----------------------------------------------------------------------------- low-speed USB device
+class UsbLsDevice:
+    """Low-speed USB device on pads 8 (D+) / 9 (D-), 16 clocks per bit (8 PIO ticks x CLKDIV 2).
+    Idle = J (D+ low, D- high, from the pad pulls: set world.pull = 0x200).
+
+    * Records every host packet it sees (start of K -> sampled at bit centres -> SE0 ends it) in
+      `rx_packets` as dicts {bits (stuffed logical bits), start, se0_start, gaps}.
+    * After a host packet it sends the next entry of `responses` (each a list of stuffed logical
+      bits, e.g. pio_usb.data_bits(...)), `turnaround` clocks after the host released the bus.
+    * `spontaneous` = [(cycle, bits)] are sent unprompted (to test the receiver alone).
+    """
+    BIT = 16
+
+    def __init__(self, responses=(), turnaround=24, spontaneous=(), scale=1.0):
+        self.scale = scale                   # device bit period = 16 * scale clocks (clock error)
+        self.responses = list(responses)
+        self.turn = turnaround
+        self.spont = sorted(spontaneous, key=lambda x: x[0])
+        self.rx_packets = []
+        self.sent = []                       # (start_cycle, bits) of packets the device sent
+        self.state = "idle"
+        self.wave = []
+        self.resp_at = None
+        self.pending = None
+        self.samples = []
+        self.next_sample = 0
+        self.se0 = 0
+        self.t0 = 0
+        self.edges = []                      # (cycle, (dp, dm)) every time the resolved bus changed
+        self._last = None
+
+    # -- waveform helpers --------------------------------------------------------------
+    def wave_of(self, bits):
+        J, K, SE0 = (0, 1), (1, 0), (0, 0)
+        lvl, out = J, []
+        syms = []
+        for b in bits:
+            if b == 0:
+                lvl = K if lvl == J else J
+            syms.append(lvl)
+        syms += [SE0, SE0, J]
+        for i, sym in enumerate(syms):            # bit i ends at round((i+1) * BIT * scale)
+            end = int(round((i + 1) * self.BIT * self.scale))
+            out += [sym] * (end - len(out))
+        return out
+
+    def _drive(self, w, dp, dm):
+        w.ext_high = (dp << 8) | (dm << 9)
+        w.ext_low = ((1 - dp) << 8) | ((1 - dm) << 9)
+
+    def _release(self, w):
+        w.ext_high = w.ext_low = 0
+
+    def step(self, w):
+        v = (w.resolve() >> 8) & 3
+        cur = (v & 1, (v >> 1) & 1)
+        if cur != self._last:
+            self.edges.append((w.cycle, cur))
+            self._last = cur
+        if self.wave:
+            dp, dm = self.wave.pop(0)
+            self._drive(w, dp, dm)
+            if not self.wave:
+                self._release(w)
+                self.state = "idle"
+            return
+        if self.spont and w.cycle >= self.spont[0][0] and self.state == "idle":
+            _, bits = self.spont.pop(0)
+            self.sent.append((w.cycle, bits))
+            self.wave = self.wave_of(bits)
+            self.state = "tx"
+            return
+        dp, dm = cur
+        if self.state == "idle":
+            if dp == 1 and dm == 0:                      # K: start of SYNC
+                self.state = "rx"
+                self.t0 = w.cycle
+                self.samples = []
+                self.next_sample = w.cycle + self.BIT // 2
+                self.se0 = 0
+        elif self.state == "rx":
+            self.se0 = self.se0 + 1 if (dp == 0 and dm == 0) else 0
+            if w.cycle == self.next_sample:
+                self.samples.append((dp, dm))
+                self.next_sample += self.BIT
+            if self.se0 >= 6:                            # EOP
+                lvl, bits = (0, 1), []                   # start from J
+                for s in self.samples:
+                    if s == (0, 0):
+                        break
+                    bits.append(1 if s == lvl else 0)
+                    lvl = s
+                self.rx_packets.append(dict(bits=bits, start=self.t0, se0_start=w.cycle - 5))
+                self.state = "wait"
+                self.resp_at = w.cycle + (2 * self.BIT - 6) + self.BIT + self.turn
+        elif self.state == "wait":
+            if w.cycle >= self.resp_at:
+                if self.responses:
+                    bits = self.responses.pop(0)
+                    self.sent.append((w.cycle, bits))
+                    self.wave = self.wave_of(bits)
+                    self.state = "tx"
+                else:
+                    self.state = "idle"
 # ----------------------------------------------------------------------------- I2C master
 class I2cMaster:
     """Behavioural multi-master-capable I2C master on pads 8 (SDA) / 9 (SCL).
