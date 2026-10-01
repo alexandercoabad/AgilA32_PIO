@@ -231,6 +231,8 @@ def _encode(line, prog, sym):
         return word(5, (2 << 5) | (0 << 3) | 2)          # mov y, y
 
     if mn == "jmp":
+        args = [a for a in args if a != ","]        # `jmp pin, label` == `jmp pin label`
+        low = [t.lower() for t in args]
         cond = ""
         rest = args
         if args and args[0].lower() in JMP_COND and args[0].lower() != "":
@@ -276,7 +278,7 @@ def _encode(line, prog, sym):
         table = IN_SRC if mn == "in" else OUT_DST
         if low[0] not in table:
             raise AsmError("%s: bad %s '%s'" % (mn, "source" if mn == "in" else "destination", args[0]))
-        cnt = _eval(args[2], sym, "bit count")
+        cnt = _eval(" ".join(args[2:]), sym, "bit count")   # whole expression, not just the first token
         if not 1 <= cnt <= 32:
             raise AsmError("bit count must be 1..32")
         return word(2 if mn == "in" else 3, (table[low[0]] << 5) | (cnt & 31))
@@ -319,7 +321,7 @@ def _encode(line, prog, sym):
         need(3)
         if low[0] not in SET_DST:
             raise AsmError("set: bad destination '%s'" % args[0])
-        val = _eval(args[2], sym, "set value")
+        val = _eval(" ".join(args[2:]), sym, "set value")   # whole expression, not just the first token
         if not 0 <= val < 32:
             raise AsmError("set value must be 0..31")
         return word(7, (SET_DST[low[0]] << 5) | val)

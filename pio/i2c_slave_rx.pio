@@ -1,0 +1,56 @@
+; I2C slave, WRITE direction (master -> us).  Autonomous: address match, ACK, N data bytes to the RX FIFO.
+;
+; Config: SDA = pad 8 (IN base, SET base), SCL = pad 9 (JMP_PIN).  IN/OUT shift left, no autopush/autopull,
+; PULL threshold 8 (the OSR is used as a hardware bit counter).  Host init, before enabling the SM:
+;   push (own 7-bit address) to the TX FIFO, force `pull block` and `mov y, osr`, force `jmp idle`.
+;
+; Behaviour (see tools/pio_i2c_slave.py for the RX word format: mask the pushed word with 0xFF):
+;   * START = SDA falls while SCL is high.  Address byte: 7 bits compared with Y, then R/W.
+;   * R/W = 1 (master wants to read) or address mismatch: no ACK; the SM goes back to idle.
+;   * match + write: ACK, then exactly WRITE_BYTES data bytes are received, each pushed and ACKed.
+;     After the last one the SM returns to idle, so any further byte is NAKed ("buffer full").
+;
+; WHY BOUNDED: while it waits for the next data bit the SM cannot notice a STOP/START (PIO has no
+; asynchronous branch), so a master that ends a write early would leave it out of step. Fixing the
+; length at assembly time (WRITE_BYTES, 1..29; or patch the `set x` word) avoids that.
+; TIMING (measured, test_i2c_slave_scl_speed_limits): the ACK is on the wire before SCL rises for an SCL period
+; >= 32 clocks at CLKDIV 1 (low phase >= 16 ticks); it is too late at 24 and below. Keep a margin: >= 40.
+.program i2c_slave_rx
+.define public WRITE_BYTES 2
+
+public idle:
+    wait 1 pin, 0                 ; SDA high ...
+    wait 0 pin, 0                 ; ... then falls
+    jmp pin, start                ; while SCL is high: START
+    jmp idle                      ; SCL was low: just someone's data, keep watching
+start:
+    set x, 0                      ; x = 0 means "the next byte is the address"
+    wait 0 pin, 1                 ; START hold: SCL goes low
+rxbyte:
+    mov osr, null                 ; osr shift count = 0 : hardware bit counter
+rbit:
+    wait 1 pin, 1
+    in pins, 1                    ; sample SDA on the rising edge
+    wait 0 pin, 1
+    out null, 1
+    jmp !osre rbit                ; 8 bits
+    jmp !x isaddr
+    push                          ; data byte -> host
+ack:
+    set pindirs, 1                ; ACK: pull SDA low ...
+    wait 1 pin, 1
+    wait 0 pin, 1                 ; ... for one SCL pulse
+    set pindirs, 0
+    jmp x-- chk                   ; x = bytes still to do (+1 while in the address phase)
+chk:
+    jmp !x idle                   ; done
+    jmp rxbyte
+isaddr:
+    mov osr, isr
+    out null, 24                  ; drop everything but the last 8 bits
+    out x, 7                      ; x = 7-bit address
+    jmp x!=y idle                 ; not for us: no ACK
+    out x, 1                      ; x = R/W
+    jmp x-- idle                  ; read request: not supported by this program
+    set x, WRITE_BYTES + 1
+    jmp ack

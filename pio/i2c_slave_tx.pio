@@ -1,0 +1,57 @@
+; I2C slave, READ direction (us -> master).  Autonomous: address match, ACK, then bytes from the TX FIFO
+; until the master NAKs.  If the FIFO is empty when a byte is needed the SM HOLDS SCL LOW (clock
+; stretching, via side-set on the blocking `pull`) until the host supplies it.
+;
+; Config: SDA = pad 8 (IN/OUT/SET base), SCL = pad 9 (JMP_PIN and SIDE-SET base, 2 bits: opt + pindirs).
+; OUT/IN shift left, no autopush/autopull, PULL threshold 8. EXECCTRL wrap: rdbyte..last instruction.
+; Host init: push (own 7-bit address), force `pull block` and `mov y, osr`, force `jmp idle`.
+; Data words: (~byte & 0xFF) << 24 -- PINDIR polarity: bit 1 = pull the line low (tools/pio_i2c_slave.py).
+;
+; A write request (R/W = 0) or a different address is ignored: no ACK, back to idle.
+; TIMING (measured, test_i2c_slave_scl_speed_limits): the ACK is on the wire before SCL rises for an SCL period
+; >= 32 clocks at CLKDIV 1 (low phase >= 16 ticks); it is too late at 24 and below. Keep a margin: >= 40.
+.program i2c_slave_tx
+.side_set 1 opt pindirs
+.define public SCL_LOW  1
+.define public SCL_HIGH 0
+
+public idle:
+    wait 1 pin, 0
+    wait 0 pin, 0
+    jmp pin, start                ; START: SDA fell while SCL high
+    jmp idle
+start:
+    wait 0 pin, 1
+    mov osr, null
+abit:
+    wait 1 pin, 1
+    in pins, 1
+    wait 0 pin, 1
+    out null, 1
+    jmp !osre abit                ; 8 bits: 7 address + R/W
+    mov osr, isr
+    out null, 24
+    out x, 7
+    jmp x!=y idle                 ; not us
+    out x, 1                      ; x = R/W
+    jmp !x idle                   ; write request: not supported by this program
+    set pindirs, 1                ; ACK the address
+    wait 1 pin, 1
+    wait 0 pin, 1
+.wrap_target
+public rdbyte:
+    pull block side SCL_LOW       ; next data byte; SCL held low while we wait for the host
+rbit:
+    out pindirs, 1                ; present the bit while SCL is still held low ...
+    wait 1 pin, 1 side SCL_HIGH   ; ... and only THEN release SCL (side-set acts on the first tick of
+                                  ; a waiting instruction): data setup time after a clock stretch
+    wait 0 pin, 1
+    jmp !osre rbit
+    set pindirs, 0                ; release SDA for the master's ACK/NAK
+    wait 1 pin, 1
+    in pins, 1                    ; sample it
+    mov osr, ::isr
+    out x, 1                      ; x = 1 if NAK
+    wait 0 pin, 1
+    jmp x-- idle                  ; NAK: the master is done
+.wrap

@@ -15,7 +15,10 @@ from cocotb.triggers import ClockCycles, RisingEdge
 
 from pio_tb_lib import *            # noqa: F401,F403
 import pio_i2c
-import pio_usb
+from pio_tb_lib import I2cMaster
+from pio_i2c_slave import (I2cSlaveRx, I2cSlaveTx, PIN_OWN_MASK as SL_OWN, INIT_INSTRS as SL_INIT, tx_word)
+from pio_i2c_mm import (I2cMM, SM_CONFIG as MM_CONFIG, PIN_OWN_MASK as MM_OWN, IRQ_LOST, IRQ_NAK,
+                        shift_ctrl as mm_shift, MOV_ISR_NULL as MM_MOV_ISR_NULL)
 from pio_tb_lib import (PioBus, World, Wire, SerialSource, SpiSlave, I2cSlave, decode_uart,
                         Ps2Keyboard, decode_ps2_word,
                         assemble, sm_reg, R_CTRL, R_IRQ, R_FSTAT, R_PIN_OWN, R_SYNC_BYP,
@@ -681,174 +684,386 @@ async def test_ps2_rx_runs_alongside_spi_master(dut):
     assert probe.both > 500, "SPI and PS/2 did not overlap in time (%d SCK edges)" % probe.both
 
 
-# ============================================================================= low-speed USB
-USB_DIV = (2, 0)                # 8 ticks/bit x CLKDIV 2 = 16 clk/bit (24 MHz core -> 1.5 Mb/s)
+# ============================================================================= I2C multi-master
+def scl_period_and_high(slave):
+    """(rise-to-rise gaps, high times) in clocks, from the resolved SCL edges the slave saw."""
+    e = slave.scl_edges
+    rises = [c for c, lvl in e if lvl == 1]
+    gaps = [b - a for a, b in zip(rises, rises[1:])]
+    highs = [e[k + 1][0] - e[k][0] for k in range(len(e) - 1) if e[k][1] == 1]
+    return gaps, highs
 
 
-async def usb_setup(dut, device, entry="tx_start", ctx=None):
-    """Bring up SM0 with usb_ls.pio. Pass the (bus, world) of an earlier call as `ctx` to reuse the
-    clock and pad model (tests that loop must not start a second clock / World); the state machine
-    is then restarted and the new device replaces the old one."""
-    if ctx is None:
-        bus, world = await setup(dut)
-    else:
-        bus, world = ctx
-        await bus.write(R_CTRL, (1 << 4) | (1 << 8) | (1 << 12))          # disable + restart + FIFO clear
-        bus.en_mask = 0
-        world.devs[:] = []
-        world.ext_high = world.ext_low = 0
-        await ClockCycles(dut.clk, 40)
-    world.pull = 0x200                                     # D+ pulled down, D- pulled up: idle = J
-    device.spont = [(c + world.cycle, bits) for c, bits in device.spont]   # times are relative
-    prog = load_src("usb_ls.pio")
-    await bus.load_program(prog)
-    await bus.sm_setup(0, prog, out_base=8, out_count=2, set_base=8, set_count=2, in_base=8,
-                       autopull=True, autopush=True, in_right=False, out_right=True,
-                       div=USB_DIV, entry=prog.labels[entry] + prog.origin)
-    world.devs.append(device)
-    await bus.write(R_PIN_OWN, 0x300)                      # D+/D- = PIO pins 8/9, PINDIR = 0 (released)
+async def mm_setup(dut, devs, div=(1, 0)):
+    bus, world = await setup(dut)
+    mm = I2cMM()
+    for d in devs:
+        world.devs.append(d)
+    await bus.load_program(mm.prog)
+    await bus.sm_setup(0, mm.prog, div=div, entry=mm.entry, **MM_CONFIG)
+    await bus.write(R_PIN_OWN, MM_OWN)
     await bus.set_enable(0)
-    return bus, world, prog
+    await bus.write(sm_reg(0, SM_SHIFT), mm_shift(False))
+    await bus.force(0, MM_MOV_ISR_NULL)
+    return bus, world, mm
 
 
-async def usb_send(bus, bits):
-    for w in pio_usb.tx_words(bits):
-        await bus.tx_put_blocking(0, w)
+async def mm_run(bus, mm, words, stop_on_irq=True, timeout=30000, settle=3, until=None):
+    """Feed `words` (TX FIFO is 4 deep); return "done", "lost" or "nak".  "done" = all words sent
+    and the SM parked at entry_point; the IRQ flags are checked on every iteration."""
+    i, parked = 0, 0
+    for _ in range(timeout):
+        flags = await bus.read(R_IRQ)
+        if flags & (1 << IRQ_LOST):
+            return "lost"
+        if flags & (1 << IRQ_NAK):
+            return "nak"
+        if i < len(words) and await bus.tx_level(0) < FIFO_DEPTH:
+            await bus.tx_put(0, words[i])
+            i += 1
+        if i == len(words):
+            pc = (await bus.read(sm_reg(0, SM_ADDR))) & 31
+            parked = parked + 1 if (pc == mm.entry and await bus.tx_level(0) == 0) else 0
+            if parked >= settle:
+                return "done"
+    raise TimeoutError("multi-master transfer never finished (%d/%d words)" % (i, len(words)))
 
 
-async def usb_collect(dut, bus, idle=900, first=4000):
-    """Wait up to `first` clocks for the first RX word, then drain until quiet for `idle` clocks.
-    (A 32-bit word takes 32 x 16 = 512 clocks to arrive, so `idle` must exceed that.)"""
-    words, quiet, waited = [], 0, 0
-    while True:
+async def mm_recover(bus, mm, flag):
+    """Host recovery after IRQ 0 (NAK) or IRQ 1 (lost): flush, restart the SM, back to entry."""
+    await bus.fifo_clear(0)
+    await bus.write(R_CTRL, bus.en_mask | (1 << 4))
+    await bus.write(R_CTRL, bus.en_mask)
+    await bus.force(0, mm.entry)
+    await bus.write(R_IRQ, 1 << flag)
+
+
+@cocotb.test()
+async def test_mm_single_master_write_and_read_no_false_arbitration(dut):
+    """With nobody else on the bus the multi-master program is an ordinary master: a 3-byte write
+    (slave ACKs pull SDA low while we released it -- that must NOT look like lost arbitration)
+    and a 3-byte read (the slave pulls SDA low for every 0 bit while we release -- ditto)."""
+    slave = I2cSlave(addr=0x50, read_bytes=[0xA5, 0x00, 0xFF])
+    bus, world, mm = await mm_setup(dut, [slave])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x12, 0x34, 0xC8])) == "done"
+    assert slave.rx == [("A", 0xA0), ("D", 0x12), ("D", 0x34), ("D", 0xC8)], slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+    assert (await bus.read(R_IRQ)) & 3 == 0, "no NAK / arbitration flag expected"
+    slave.rx.clear()
+    assert await mm_run(bus, mm, mm.start() + mm.address(0x50, read=True)) == "done"
+    await bus.write(sm_reg(0, SM_SHIFT), mm_shift(True))       # autopush only for the data bytes
+    await bus.force(0, MM_MOV_ISR_NULL)
+    words = mm.read_byte() + mm.read_byte() + mm.read_byte(last=True) + mm.stop()
+    got, i = [], 0
+    for _ in range(30000):
+        if i < len(words) and await bus.tx_level(0) < FIFO_DEPTH:
+            await bus.tx_put(0, words[i])
+            i += 1
         if await bus.rx_level(0):
-            words.append(await bus.rx_get(0))
-            quiet = 0
-            continue
-        await ClockCycles(dut.clk, 8)
-        if words:
-            quiet += 8
-            if quiet >= idle:
-                return words
-        else:
-            waited += 8
-            if waited >= first:
-                return words
+            got.append((await bus.rx_get(0)) & 0xFF)
+        if len(got) == 3 and i == len(words) and slave.stops == 2:
+            break
+    assert got == [0xA5, 0x00, 0xFF], [hex(g) for g in got]
+    assert (await bus.read(R_IRQ)) & 3 == 0, "reading must not raise the arbitration flag"
 
 
 @cocotb.test()
-async def test_usb_ls_tx_token_waveform(dut):
-    """SETUP token: the device sees exactly the intended stuffed bit stream (NRZI decoded at bit
-    centres), every line edge lies on a 16-clock bit boundary, EOP = SE0 for 32 clocks then J."""
-    dev = UsbLsDevice()
-    bus, world, prog = await usb_setup(dut, dev)
-    bits = pio_usb.token_bits(pio_usb.SETUP, 5, 0)
-    await usb_send(bus, bits)
-    await ClockCycles(dut.clk, (len(bits) + 6) * 16 + 200)
-    assert len(dev.rx_packets) == 1, dev.rx_packets
-    pkt = dev.rx_packets[0]
-    assert pkt["bits"] == bits, (pkt["bits"], bits)
-    r = pio_usb.parse(pkt["bits"])
-    assert r["name"] == "SETUP" and r["ok"] and (r["addr"], r["endp"]) == (5, 0), r
-    edges = [(c, lv) for c, lv in dev.edges if pkt["start"] <= c <= pkt["se0_start"] + 40]
-    for (c0, _), (c1, _) in zip(edges, edges[1:]):
-        assert (c1 - c0) % 16 == 0, "edge spacing %d is not a multiple of 16 clocks" % (c1 - c0)
-    se0 = [i for i, (c, lv) in enumerate(edges) if lv == (0, 0)]
-    assert len(se0) == 1 and edges[se0[0] + 1][1] == (0, 1), edges[-4:]
-    assert edges[se0[0] + 1][0] - edges[se0[0]][0] == 32, "SE0 must last exactly 2 bit times"
+async def test_mm_pio_wins_arbitration(dut):
+    """Both masters START together and send the same address; data 0x11 (PIO) vs 0x33 (model)
+    first differs at bit 2, where the PIO sends 0 and the model 1.  The model must lose and let go
+    of BOTH lines; the slave must receive the PIO's bytes intact; the PIO must not flag anything."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x33), ("write", 0x77), ("stop",)],
+                   join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x11, 0x55])) == "done"
+    assert m2.lost and m2.lost_at == (1, 2), "model must lose at data byte 1, bit 2: %s" % (m2.lost_at,)
+    assert m2.low == 0, "the loser must have released SDA and SCL"
+    assert slave.rx == [("A", 0xA0), ("D", 0x11), ("D", 0x55)], slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+    assert (await bus.read(R_IRQ)) & 3 == 0
+    assert world.bus_trace[-1] == 0b11
 
 
 @cocotb.test()
-async def test_usb_ls_tx_data_with_bit_stuffing(dut):
-    """DATA1 with 8 x 0xFF (maximum stuffing): the device recovers payload and CRC16, and the
-    line never stays in one state for more than 7 bit times."""
-    dev = UsbLsDevice()
-    bus, world, prog = await usb_setup(dut, dev)
-    payload = [0xFF] * 8
-    bits = pio_usb.data_bits(pio_usb.DATA1, payload)
-    assert len(bits) > 96             # stuffing really adds bits (96 raw bits)
-    await usb_send(bus, bits)
-    await ClockCycles(dut.clk, (len(bits) + 6) * 16 + 300)
-    r = pio_usb.parse(dev.rx_packets[0]["bits"])
-    assert r["name"] == "DATA1" and r["payload"] == payload and r["ok"], r
-    runs = [(b - a) for (a, _), (b, _) in zip(dev.edges, dev.edges[1:])]
-    assert max(runs[:-2]) <= 7 * 16, "a level lasted %d clocks (> 7 bit times)" % max(runs)
+async def test_mm_pio_loses_arbitration_releases_bus_and_retries(dut):
+    """Roles swapped: the PIO sends 0x33 against the model's 0x11.  At bit 2 the PIO releases SDA
+    for a 1 and reads 0 -> IRQ 1, and it must let go of SDA *and* SCL at once (the model's byte
+    completes untouched: slave sees 0x11, 0x55).  After the documented recovery the PIO retries and
+    its own 0x33 gets through."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x11), ("write", 0x55), ("stop",)],
+                   join_start=True, period=64)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    words = mm.write_transaction(0x50, [0x33])
+    assert await mm_run(bus, mm, words) == "lost"
+    assert (await bus.read(sm_reg(0, SM_ADDR))) & 31 == 4, "SM must be parked on `irq wait 1`"
+    for _ in range(2000):                                # let the winner finish its transaction
+        await ClockCycles(dut.clk, 1)
+        if m2.done:
+            break
+    assert m2.done and not m2.lost and m2.acks == [0, 0, 0], (m2.done, m2.lost, m2.acks)
+    assert slave.rx == [("A", 0xA0), ("D", 0x11), ("D", 0x55)], "winner's data corrupted: %s" % slave.rx
+    assert (slave.starts, slave.stops) == (1, 1) and not slave.violations, slave.violations
+    assert world.mlow == 0, "the loser must not be driving either line"
+    await mm_recover(bus, mm, IRQ_LOST)
+    slave.rx.clear()
+    assert await mm_run(bus, mm, words) == "done", "retry after recovery must work"
+    assert slave.rx == [("A", 0xA0), ("D", 0x33)], slave.rx
+    assert slave.stops == 2 and not slave.violations, slave.violations
 
 
 @cocotb.test()
-async def test_usb_ls_in_transaction(dut):
-    """Host sends IN addr 5 ep 1; the device answers DATA1 (8 bytes, several stuffed bits) after a
-    short turnaround. The same state machine flips from TX to RX on its own (no CPU), and the
-    host recovers payload + CRC from the RX FIFO."""
-    payload = [0xFF, 0x00, 0xFF, 0xFF, 0x3F, 0xFC, 0x81, 0xFF]
-    dev = UsbLsDevice(responses=[pio_usb.data_bits(pio_usb.DATA1, payload)], turnaround=24)
-    bus, world, prog = await usb_setup(dut, dev)
-    await usb_send(bus, pio_usb.token_bits(pio_usb.IN, 5, 1))
-    words = await usb_collect(dut, bus)
-    r = pio_usb.decode_rx(words)
-    assert r["name"] == "DATA1" and r["payload"] == payload and r["ok"], (r, [hex(w) for w in words])
-    tok = pio_usb.parse(dev.rx_packets[0]["bits"])
-    assert tok["name"] == "IN" and tok["ok"] and (tok["addr"], tok["endp"]) == (5, 1), tok
-    assert len(words) <= 4, "response must fit the 4-deep RX FIFO"
+async def test_mm_address_phase_arbitration(dut):
+    """Arbitration can be lost inside the ADDRESS byte too: the PIO addresses 0x50 (1010000x), the
+    model 0x48 (1001000x); the first difference is address bit 3 (PIO releases, model drives 0) so
+    the PIO loses there.  The slave only knows 0x48 -- it must ACK the model, and the PIO must
+    have flagged the loss before sending any data."""
+    slave = I2cSlave(addr=0x48)
+    m2 = I2cMaster([("start",), ("write", 0x90), ("write", 0x5A), ("stop",)], join_start=True)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x99])) == "lost"
+    for _ in range(2000):
+        await ClockCycles(dut.clk, 1)
+        if m2.done:
+            break
+    assert slave.rx == [("A", 0x90), ("D", 0x5A)], slave.rx
+    assert m2.acks == [0, 0] and not slave.violations, (m2.acks, slave.violations)
 
 
 @cocotb.test()
-async def test_usb_ls_handshakes_nak_and_ack(dut):
-    """Short packets (PID only) must decode too: NAK in answer to an IN token."""
-    dev = UsbLsDevice(responses=[pio_usb.handshake_bits(pio_usb.NAK)])
-    bus, world, prog = await usb_setup(dut, dev)
-    await usb_send(bus, pio_usb.token_bits(pio_usb.IN, 3, 0))
-    r = pio_usb.decode_rx(await usb_collect(dut, bus))
-    assert r["name"] == "NAK" and r["ok"], r
+async def test_mm_clock_synchronisation_with_slower_master(dut):
+    """A second master with a 2x slower clock (period 128) writes the SAME bytes: the wired-AND SCL
+    is low until the slow one releases, and the PIO's `wait 1 pin, 1` must hold its high phase off
+    until SCL is really high.  Both complete without arbitration loss, and the slave sees clean
+    data with no violations."""
+    slave = I2cSlave(addr=0x50)
+    m2 = I2cMaster([("start",), ("write", 0xA0), ("write", 0x5A), ("stop",)], join_start=True, period=128)
+    bus, world, mm = await mm_setup(dut, [slave, m2])
+    assert await mm_run(bus, mm, mm.write_transaction(0x50, [0x5A]), timeout=60000) == "done"
+    assert not m2.lost and m2.acks == [0, 0], (m2.lost, m2.acks)
+    assert slave.rx[:2] == [("A", 0xA0), ("D", 0x5A)], slave.rx
+    assert not slave.violations, slave.violations
+    gaps, highs = scl_period_and_high(slave)
+    # I2C clock synchronisation: SCL low lasts as long as the SLOWEST master's low phase, high as
+    # long as the FASTEST master's high phase.  Here that is ~82 clocks per bit (the PIO alone
+    # does 33), and it must be stable from bit to bit.
+    assert min(gaps[:8]) >= 70, "SCL must slow down to the slower master: %s" % gaps[:8]
+    assert max(gaps[:8]) - min(gaps[:8]) <= 2, "SCL period must be stable: %s" % gaps[:8]
+
+
+# ============================================================================= I2C slave
+async def slave_setup(dut, slave, master):
+    bus, world = await setup(dut)
+    world.devs.append(master)
+    await bus.load_program(slave.prog)
+    await bus.sm_setup(0, slave.prog, div=(1, 0), entry=slave.idle, **slave.config)
+    await bus.write(R_PIN_OWN, SL_OWN)
+    await bus.tx_put(0, slave.addr7)                       # own address -> Y (forced pull + mov y, osr)
+    for ins in SL_INIT:
+        await bus.force(0, ins)
+    await bus.force(0, slave.idle)
+    await bus.set_enable(0)
+    return bus, world
+
+
+async def drain_rx(bus, n, master, extra=6000, timeout=60000):
+    """Collect up to `n` RX bytes; return once the master script is done (plus `extra` clocks)."""
+    got, tail = [], extra
+    for _ in range(timeout):
+        if await bus.rx_level(0):
+            got.append((await bus.rx_get(0)) & 0xFF)
+        if master.done:
+            tail -= 1
+            if tail <= 0 or len(got) >= n:
+                break
+    return got
 
 
 @cocotb.test()
-async def test_usb_ls_rx_only_entry(dut):
-    """Receiver on its own (entry = rx_start): a device that speaks first - ACK then a DATA0 with a
-    zero-length payload - is received in order, one packet per RX burst."""
-    dev = UsbLsDevice(spontaneous=[(900, pio_usb.handshake_bits(pio_usb.ACK))])
-    bus, world, prog = await usb_setup(dut, dev, entry="rx_start")
-    r = pio_usb.decode_rx(await usb_collect(dut, bus))
-    assert r["name"] == "ACK" and r["ok"], r
+async def test_i2c_slave_rx_write(dut):
+    """An external master writes 0x42 + [0xA5, 0x3C].  The slave ACKs the address and both bytes (the
+    master sees ACK, ACK, ACK on the wire), delivers exactly those two bytes to the RX FIFO, and never
+    drives SCL."""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0xA5), ("write", 0x3C), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    got = await drain_rx(bus, 2, m)
+    assert got == [0xA5, 0x3C], [hex(g) for g in got]
+    assert m.acks == [0, 0, 0], "master must see ACK ACK ACK, got %s" % m.acks
+    assert not m.lost and world.mlow & 0x200 == 0, "slave must never pull SCL low"
 
 
 @cocotb.test()
-async def test_usb_ls_rx_random_payloads(dut):
-    """Fuzz the receiver: 12 random DATA packets of 0..8 bytes, restarting the SM each time."""
-    rnd = random.Random(2024)
-    ctx = None
-    for n in range(12):
-        payload = [rnd.randrange(256) for _ in range(rnd.randrange(9))]
-        pid = pio_usb.DATA0 if n % 2 == 0 else pio_usb.DATA1
-        dev = UsbLsDevice(spontaneous=[(700, pio_usb.data_bits(pid, payload))])
-        bus, world, prog = await usb_setup(dut, dev, entry="rx_start", ctx=ctx)
-        ctx = (bus, world)
-        words = await usb_collect(dut, bus)
-        r = pio_usb.decode_rx(words)
-        assert r["payload"] == payload and r["pid"] == pid and r["ok"], (n, payload, r)
+async def test_i2c_slave_rx_ignores_other_addresses_and_reads(dut):
+    """Not our address -> no ACK and nothing in the RX FIFO.  A READ request (R/W = 1) to our own address
+    is NAKed too (this program is write-only).  The slave is not wedged by either: a proper write afterwards
+    goes through."""
+    m = I2cMaster([("start",), ("write", 0x86), ("stop",),              # 0x43 write: not us
+                   ("start",), ("write", 0x85), ("stop",),              # 0x42 READ: unsupported
+                   ("start",), ("write", 0x84), ("write", 0x11), ("write", 0x22), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    got = await drain_rx(bus, 2, m)
+    assert m.acks == [1, 1, 0, 0, 0], "NAK, NAK, then ACK x3: %s" % m.acks
+    assert got == [0x11, 0x22], [hex(g) for g in got]
 
 
 @cocotb.test()
-async def test_usb_ls_rx_clock_tolerance(dut):
-    """Receiver vs a device whose bit clock is off by +-x %: report the window and require +-0.25 %.
-    The sample point is fixed after the first edge (no per-transition resync: all 32 instruction
-    words are in use), so a full 8-byte packet (up to ~112 bit times) has about +-0.45 % of margin;
-    a real low-speed device is allowed +-1.5 % by the USB spec -- see docs/info.md."""
-    payload = [0xA5, 0x5A, 0xFF, 0x00, 0x96, 0x69, 0xC3, 0x3C]
-    results = {}
-    ctx = None
-    for pct in (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0):
-        dev = UsbLsDevice(spontaneous=[(700, pio_usb.data_bits(pio_usb.DATA1, payload))],
-                          scale=1 + pct / 100.0)
-        bus, world, prog = await usb_setup(dut, dev, entry="rx_start", ctx=ctx)
-        ctx = (bus, world)
-        words = await usb_collect(dut, bus)
-        try:
-            r = pio_usb.decode_rx(words)
-            results[pct] = r["ok"] and r["payload"] == payload
-        except ValueError:
-            results[pct] = False
-    dut._log.info("USB LS RX clock tolerance (8-byte DATA1): %s" % {
-        "%+.1f%%" % k: ("ok" if v else "FAIL") for k, v in results.items()})
-    for pct in (-0.25, 0.0, 0.25):
-        assert results[pct], "receiver must tolerate %+.2f %% bit-clock error" % pct
+async def test_i2c_slave_rx_buffer_full_naks_extra_bytes(dut):
+    """The program accepts exactly WRITE_BYTES (here 2) per transaction: a third byte is NAKed, nothing more
+    reaches the FIFO, and the next transaction is unaffected ('buffer full' semantics)."""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0x01), ("write", 0x02), ("write", 0x03), ("stop",),
+                   ("start",), ("write", 0x84), ("write", 0x04), ("write", 0x05), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    got = await drain_rx(bus, 4, m)
+    assert got == [1, 2, 4, 5], got
+    assert m.acks == [0, 0, 0, 1, 0, 0, 0], "third byte NAKed: %s" % m.acks
+
+
+@cocotb.test()
+async def test_i2c_slave_rx_repeated_start_and_back_to_back(dut):
+    """STOP+START and repeated START both re-arm the slave: START addr 2 bytes REPSTART addr 2 bytes STOP."""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0x10), ("write", 0x20),
+                   ("repstart",), ("write", 0x84), ("write", 0x30), ("write", 0x40), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    got = await drain_rx(bus, 4, m)
+    assert got == [0x10, 0x20, 0x30, 0x40], [hex(g) for g in got]
+    assert m.acks == [0] * 6, m.acks
+
+
+@cocotb.test()
+async def test_i2c_slave_rx_single_byte_mode_and_all_values(dut):
+    """WRITE_BYTES = 1 (the register-pointer pattern) with every bit pattern that could confuse the
+    START detector or the address compare: 0x00, 0xFF, 0x01, 0x80 -- and an address differing in one bit."""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0x00), ("stop",),
+                   ("start",), ("write", 0x84), ("write", 0xFF), ("stop",),
+                   ("start",), ("write", 0x84), ("write", 0x01), ("stop",),
+                   ("start",), ("write", 0x84), ("write", 0x80), ("stop",),
+                   ("start",), ("write", 0x94), ("write", 0x77), ("stop",)])      # 0x4A: one bit off
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=1), m)
+    got = await drain_rx(bus, 4, m)
+    assert got == [0x00, 0xFF, 0x01, 0x80], [hex(g) for g in got]
+    assert m.acks[:8] == [0, 0] * 4 and m.acks[8] == 1, m.acks
+
+
+async def feed_tx(bus, slave_words, master, timeout=200000, extra=4000):
+    """Keep the 4-deep TX FIFO topped up with `slave_words` until the master script is done."""
+    i, tail = 0, extra
+    for _ in range(timeout):
+        level = await bus.tx_level(0)              # every iteration must consume bus cycles
+        if i < len(slave_words) and level < FIFO_DEPTH:
+            await bus.tx_put(0, slave_words[i])
+            i += 1
+        if master.done:
+            tail -= 1
+            if tail <= 0:
+                return
+    raise TimeoutError("master script never finished")
+
+
+@cocotb.test()
+async def test_i2c_slave_tx_read(dut):
+    """The master reads 4 bytes from us (ACK, ACK, ACK, then NAK on the last) and gets exactly the bytes the
+    host queued -- including 0x00 and 0xFF, which are all-released / all-driven on the wire.  The address ACK
+    shows on the wire; after the NAK the slave is idle and a second read transaction works."""
+    data = [0x5A, 0x00, 0xFF, 0xC3]
+    m = I2cMaster([("start",), ("write", 0x85), ("read", True), ("read", True), ("read", True),
+                   ("read", False), ("stop",),
+                   ("start",), ("write", 0x85), ("read", False), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveTx(0x42), m)
+    await feed_tx(bus, [tx_word(b) for b in data + [0x3E]], m)
+    assert m.reads == data + [0x3E], [hex(r) for r in m.reads]
+    assert m.acks == [0, 0], "address must be ACKed both times: %s" % m.acks
+    assert not m.lost
+
+
+@cocotb.test()
+async def test_i2c_slave_tx_stretches_clock_until_host_supplies_data(dut):
+    """With the TX FIFO EMPTY the slave must hold SCL low after ACKing the address (clock stretching via
+    side-set on the blocking `pull`) for as long as it takes -- here 3000 clocks -- while the MASTER has
+    released SCL (so the low is the slave's doing).  When the host finally queues a byte the read completes.
+    Data setup: the byte's first bit must be on the wire at least one clock BEFORE the slave lets SCL rise,
+    or a master that sees SCL high at once would sample the old level.  The slave is still holding SDA low
+    from the address ACK, so the check uses a first bit of 1: SDA must already have been released."""
+    m = I2cMaster([("start",), ("write", 0x85), ("read", False), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveTx(0x42), m)
+    stretched = 0
+    for _ in range(3000):
+        await ClockCycles(dut.clk, 1)
+        scl = (world.resolve() >> 9) & 1
+        if m.acks and not m.reads and scl == 0 and (m.low & 0x200) == 0:
+            stretched += 1                                # bus low although the master let go
+    assert m.acks == [0] and not m.reads, (m.acks, m.reads)
+    assert stretched > 2000, "SCL must be held low by the slave while it waits (%d of 3000 clocks)" % stretched
+    mark = len(world.bus_trace)
+    await bus.tx_put(0, tx_word(0xA7))                    # first bit 1: SDA must rise before SCL does
+    for _ in range(4000):
+        await ClockCycles(dut.clk, 1)
+        if m.done:
+            break
+    assert m.reads == [0xA7], [hex(r) for r in m.reads]
+    tr = world.bus_trace[mark:]
+    k = next(i for i in range(1, len(tr)) if (tr[i] >> 1) & 1 and not (tr[i - 1] >> 1) & 1)   # SCL rises
+    assert (tr[k - 1] & 1) == 1, "SDA must already be high one clock before SCL is released (data setup)"
+    assert world.bus_trace[-1] == 0b11, "bus must be released after STOP"
+
+
+@cocotb.test()
+async def test_i2c_slave_tx_ignores_writes_and_other_addresses(dut):
+    """A write to our address and any other address are NAKed (this program only serves reads) and do not
+    consume the queued data byte; the read that follows gets it."""
+    m = I2cMaster([("start",), ("write", 0x84), ("stop",),          # write to 0x42: unsupported
+                   ("start",), ("write", 0x97), ("stop",),          # read from 0x4B: not us
+                   ("start",), ("write", 0x85), ("read", False), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveTx(0x42), m)
+    await feed_tx(bus, [tx_word(0x6D)], m)
+    assert m.acks == [1, 1, 0], "NAK, NAK, ACK: %s" % m.acks
+    assert m.reads == [0x6D], [hex(r) for r in m.reads]
+
+
+@cocotb.test()
+async def test_i2c_slave_tx_long_read_with_fifo_refill(dut):
+    """12 random bytes read while the host refills the 4-deep TX FIFO on the fly (the slave stretches SCL
+    whenever the host is late).  Every byte must arrive intact and in order."""
+    rnd = random.Random(1011)
+    data = [rnd.randrange(256) for _ in range(12)]
+    m = I2cMaster([("start",), ("write", 0x85)] + [("read", True)] * 11 + [("read", False), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveTx(0x42), m)
+    await feed_tx(bus, [tx_word(b) for b in data], m)
+    assert m.reads == data, [hex(r) for r in m.reads]
+    assert m.acks == [0]
+
+
+def ack_setup_ok(world, ack_rise_indices):
+    """True if SDA was already low in the very clock SCL rose, for each given SCL rising edge (0-based)."""
+    tr = world.bus_trace
+    rises = [i for i in range(1, len(tr)) if (tr[i] >> 1) & 1 and not (tr[i - 1] >> 1) & 1]
+    return all(len(rises) > k and (tr[rises[k]] & 1) == 0 for k in ack_rise_indices)
+
+
+@cocotb.test()
+async def test_i2c_slave_scl_speed_limits(dut):
+    """How fast an SCL can the slaves follow?  Sweep the master's SCL period (clocks; its low phase is half of
+    it) with both slaves at CLKDIV 1.  A master only sees a valid ACK if SDA is ALREADY low when SCL rises, so
+    this checks the ACK on the wire at the rising edge itself (not a late sample).  The slave needs ~12 ticks
+    after the 8th SCL fall to drive it, so there is a hard limit; the table is logged."""
+    ok = {}
+    for period in (16, 24, 32, 40, 48, 64):
+        m = I2cMaster([("start",), ("write", 0x84), ("write", 0xA5), ("stop",)], period=period)
+        bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=1), m)
+        got = await drain_rx(bus, 1, m, extra=2000)
+        rx_ok = got == [0xA5] and m.acks == [0, 0] and ack_setup_ok(world, (8, 17))
+        m = I2cMaster([("start",), ("write", 0x85), ("read", False), ("stop",)], period=period)
+        bus, world = await slave_setup(dut, I2cSlaveTx(0x42), m)
+        await bus.tx_put(0, tx_word(0x5C))
+        for _ in range(6000):
+            await ClockCycles(dut.clk, 1)
+            if m.done:
+                break
+        tx_ok = m.reads == [0x5C] and m.acks == [0] and ack_setup_ok(world, (8,))
+        ok[period] = (rx_ok, tx_ok)
+    dut._log.info("I2C slave, ACK valid at the SCL rising edge, vs SCL period (clocks): %s" % {
+        p: ("rx " + ("ok" if r else "FAIL"), "tx " + ("ok" if t else "FAIL")) for p, (r, t) in ok.items()})
+    for p in (32, 40, 48, 64):
+        assert ok[p] == (True, True), "documented range (SCL period >= 32 clocks) must work: %s" % ok
+    for p in (16, 24):
+        assert ok[p] != (True, True), "a %d-clock SCL period leaves too little time to ACK: %s" % (p, ok)

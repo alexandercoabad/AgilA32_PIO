@@ -12,6 +12,8 @@
 """
 import os
 import sys
+from functools import reduce
+from operator import or_
 
 from cocotb.triggers import ClockCycles, RisingEdge, Timer
 
@@ -126,10 +128,7 @@ class World:
     def __init__(self, dut):
         self.d = dut
         self.ext_in = 0x000          # value driven onto pads 0-7 by the outside world
-        self.ext_low = 0x000         # external devices pulling pads 8/9 low
-        self.ext_high = 0x000        # external devices driving pads 8/9 high (push-pull, e.g. USB)
-        self.pull = 0x300            # idle level of pads 8/9 when nobody drives (I2C: both pulled up;
-                                     # low-speed USB: D+ pulled down, D- pulled up -> 0x200)
+        self.ext_low = 0x000         # open-drain pull-downs by external devices (pads 8/9)
         self.devs = []
         self.cycle = 0
         self.pin_out = self.pin_dir = self.own = 0
@@ -139,10 +138,7 @@ class World:
         self.irq_seen = 0
 
     def resolve(self):
-        drv = self.own & self.pin_dir & 0x300                  # pads the PIO actually drives
-        val = (self.pull & ~drv) | (self.pin_out & drv)        # PINDIR = 1 drives the pin_out value
-        val = (val | self.ext_high) & ~self.ext_low
-        return val & 0x300
+        return 0x300 & ~(self.mlow | self.ext_low)
 
     def pins_raw(self):
         return (self.ext_in & 0xFF) | self.resolve()
@@ -158,6 +154,10 @@ class World:
             self.cycle += 1
             for dev in self.devs:
                 dev.step(self)
+            # several open-drain devices may share pads 8/9 (wired-AND): OR their pull-downs
+            lows = [dev.low for dev in self.devs if hasattr(dev, "low")]
+            if lows:
+                self.ext_low = (self.ext_low & ~0x300) | (reduce(or_, lows) & 0x300)
             self.out_trace.append(self.pin_out)
             self.bus_trace.append(((self.resolve() >> 8) & 3))
             d.pins_raw.value = self.pins_raw()
@@ -404,8 +404,12 @@ class I2cSlave:
         self.tx_byte = 0
         self.master_ack = False
 
+    @property
+    def low(self):
+        return (0x100 if self.sda_low else 0) | (0x200 if self.scl_low else 0)
+
     def _apply(self, w):
-        w.ext_low = (w.ext_low & ~0x300) | (0x100 if self.sda_low else 0) | (0x200 if self.scl_low else 0)
+        w.ext_low = (w.ext_low & ~0x300) | self.low
 
     def _drive_bit(self, i):
         self.sda_low = 0 if (self.tx_byte >> (7 - i)) & 1 else 1
@@ -497,107 +501,185 @@ class I2cSlave:
                     self.mode, self.sda_low = "ignore", 0
 
 
-# ----------------------------------------------------------------------------- low-speed USB device
-class UsbLsDevice:
-    """Low-speed USB device on pads 8 (D+) / 9 (D-), 16 clocks per bit (8 PIO ticks x CLKDIV 2).
-    Idle = J (D+ low, D- high, from the pad pulls: set world.pull = 0x200).
+# ----------------------------------------------------------------------------- I2C master
+class I2cMaster:
+    """Behavioural multi-master-capable I2C master on pads 8 (SDA) / 9 (SCL).
 
-    * Records every host packet it sees (start of K -> sampled at bit centres -> SE0 ends it) in
-      `rx_packets` as dicts {bits (stuffed logical bits), start, se0_start, gaps}.
-    * After a host packet it sends the next entry of `responses` (each a list of stuffed logical
-      bits, e.g. pio_usb.data_bits(...)), `turnaround` clocks after the host released the bus.
-    * `spontaneous` = [(cycle, bits)] are sent unprompted (to test the receiver alone).
+    Runs a script of ("start",) ("repstart",) ("write", byte) ("read", ack) ("stop",) steps, one
+    cooperative generator advanced every clock.  Everything a real multi-master must do is here:
+      * clock synchronisation: it releases SCL, then WAITS until SCL is actually high (another
+        master, or a stretching slave, may hold it low) and only then times its high phase;
+      * arbitration: while it releases SDA for a 1 it watches the bus, and the moment SDA reads 0 it
+        has lost -- it lets go of BOTH lines at once, sets `lost`, records the bit index, and stops;
+      * bus-free wait before START (both lines high for `t_free` clocks).
+    `period` is the SCL period in clocks; `start_at` delays the first action (absolute cycle).
     """
-    BIT = 16
 
-    def __init__(self, responses=(), turnaround=24, spontaneous=(), scale=1.0):
-        self.scale = scale                   # device bit period = 16 * scale clocks (clock error)
-        self.responses = list(responses)
-        self.turn = turnaround
-        self.spont = sorted(spontaneous, key=lambda x: x[0])
-        self.rx_packets = []
-        self.sent = []                       # (start_cycle, bits) of packets the device sent
-        self.state = "idle"
-        self.wave = []
-        self.resp_at = None
-        self.pending = None
-        self.samples = []
-        self.next_sample = 0
-        self.se0 = 0
-        self.t0 = 0
-        self.edges = []                      # (cycle, (dp, dm)) every time the resolved bus changed
-        self._last = None
+    def __init__(self, script, period=64, start_at=0, t_free=128, name="M2", join_start=False,
+                 sample_delay=8):
+        self.script, self.period, self.start_at, self.t_free, self.name = script, period, start_at, t_free, name
+        self.join_start = join_start        # START the moment another master's START is seen
+        self.sample_delay = sample_delay
+        self.low = 0                     # 0x100 = pulling SDA low, 0x200 = pulling SCL low
+        self.sda = self.scl = 1
+        self.cycle = 0
+        self.lost = False
+        self.lost_at = None              # (byte index, bit index) where arbitration was lost
+        self.done = False
+        self.acks = []                   # ACK level seen after each written byte (0 = ACK)
+        self.reads = []
+        self.stops = 0
+        self._pend = None
+        self._gen = self._run()
+        self._byte_no = 0
 
-    # -- waveform helpers --------------------------------------------------------------
-    def wave_of(self, bits):
-        J, K, SE0 = (0, 1), (1, 0), (0, 0)
-        lvl, out = J, []
-        syms = []
-        for b in bits:
-            if b == 0:
-                lvl = K if lvl == J else J
-            syms.append(lvl)
-        syms += [SE0, SE0, J]
-        for i, sym in enumerate(syms):            # bit i ends at round((i+1) * BIT * scale)
-            end = int(round((i + 1) * self.BIT * self.scale))
-            out += [sym] * (end - len(out))
-        return out
-
-    def _drive(self, w, dp, dm):
-        w.ext_high = (dp << 8) | (dm << 9)
-        w.ext_low = ((1 - dp) << 8) | ((1 - dm) << 9)
-
-    def _release(self, w):
-        w.ext_high = w.ext_low = 0
-
+    # -- cooperative scheduler -------------------------------------------------------------
     def step(self, w):
-        v = (w.resolve() >> 8) & 3
-        cur = (v & 1, (v >> 1) & 1)
-        if cur != self._last:
-            self.edges.append((w.cycle, cur))
-            self._last = cur
-        if self.wave:
-            dp, dm = self.wave.pop(0)
-            self._drive(w, dp, dm)
-            if not self.wave:
-                self._release(w)
-                self.state = "idle"
-            return
-        if self.spont and w.cycle >= self.spont[0][0] and self.state == "idle":
-            _, bits = self.spont.pop(0)
-            self.sent.append((w.cycle, bits))
-            self.wave = self.wave_of(bits)
-            self.state = "tx"
-            return
-        dp, dm = cur
-        if self.state == "idle":
-            if dp == 1 and dm == 0:                      # K: start of SYNC
-                self.state = "rx"
-                self.t0 = w.cycle
-                self.samples = []
-                self.next_sample = w.cycle + self.BIT // 2
-                self.se0 = 0
-        elif self.state == "rx":
-            self.se0 = self.se0 + 1 if (dp == 0 and dm == 0) else 0
-            if w.cycle == self.next_sample:
-                self.samples.append((dp, dm))
-                self.next_sample += self.BIT
-            if self.se0 >= 6:                            # EOP
-                lvl, bits = (0, 1), []                   # start from J
-                for s in self.samples:
-                    if s == (0, 0):
-                        break
-                    bits.append(1 if s == lvl else 0)
-                    lvl = s
-                self.rx_packets.append(dict(bits=bits, start=self.t0, se0_start=w.cycle - 5))
-                self.state = "wait"
-                self.resp_at = w.cycle + (2 * self.BIT - 6) + self.BIT + self.turn
-        elif self.state == "wait":
-            if w.cycle >= self.resp_at:
-                if self.responses:
-                    bits = self.responses.pop(0)
-                    self.sent.append((w.cycle, bits))
-                    self.wave = self.wave_of(bits)
-                    self.state = "tx"
+        lines = w.resolve()
+        self.sda, self.scl = (lines >> 8) & 1, (lines >> 9) & 1
+        self.cycle = w.cycle
+        while not self.done:
+            if self._pend is None:
+                try:
+                    self._pend = next(self._gen)
+                except StopIteration:
+                    self.done = True
+                    return
+            if isinstance(self._pend, int):
+                if self._pend > 0:
+                    self._pend -= 1
+                    return
+                self._pend = None
+            else:
+                if not self._pend():
+                    return
+                self._pend = None
+
+    def _sda(self, level):
+        self.low = (self.low & ~0x100) | (0 if level else 0x100)
+
+    def _scl(self, level):
+        self.low = (self.low & ~0x200) | (0 if level else 0x200)
+
+    def _release_all(self):
+        self.low = 0
+
+    # -- protocol pieces -------------------------------------------------------------------
+    def _wait_bus_free(self):
+        idle = 0
+        while idle < self.t_free:
+            idle = idle + 1 if (self.sda and self.scl) else 0
+            yield 1
+
+    def _clock_high(self):
+        """Release SCL, wait until it is really high (clock sync), then wait `sample_delay`
+        clocks and return -- the caller samples SDA there.  Sampling early matters: another
+        master with a shorter high phase may pull SCL low (and then change SDA) soon after."""
+        self._scl(1)
+        yield lambda: self.scl == 1
+        yield self.sample_delay
+
+    def _high_remaining(self, n):
+        """Rest of our SCL high phase.  Clock synchronisation: if another master pulls SCL low
+        first, our high phase ends right there (and our low phase counts from that fall)."""
+        for _ in range(n):
+            if self.scl == 0:
+                return
+            yield 1
+
+    def _bit_out(self, b):
+        q = self.period // 4
+        self._sda(b)
+        yield q
+        yield from self._clock_high()
+        if b and self.sda == 0:                       # released SDA but the bus is low: lost
+            self.lost = True
+            self.lost_at = (self._byte_no, self._bitno)
+            self._release_all()
+            return False
+        yield from self._high_remaining(2 * q - self.sample_delay)
+        self._scl(0)
+        yield q
+        return True
+
+    def _write_byte(self, byte):
+        for i in range(8):
+            self._bitno = i
+            ok = yield from self._bit_out((byte >> (7 - i)) & 1)
+            if not ok:
+                return False
+        # ACK slot: release SDA, read what the slave does
+        q = self.period // 4
+        self._sda(1)
+        yield q
+        yield from self._clock_high()
+        self.acks.append(self.sda)
+        yield from self._high_remaining(2 * q - self.sample_delay)
+        self._scl(0)
+        yield q
+        self._byte_no += 1
+        return True
+
+    def _read_byte(self, ack):
+        """Release SDA for 8 bits and sample what the slave drives; then ACK (drive low) or NAK."""
+        q = self.period // 4
+        val = 0
+        for _ in range(8):
+            self._sda(1)
+            yield q
+            yield from self._clock_high()            # waits while a slave stretches SCL
+            val = (val << 1) | self.sda
+            yield from self._high_remaining(2 * q - self.sample_delay)
+            self._scl(0)
+            yield q
+        self._sda(0 if ack else 1)
+        yield q
+        yield from self._clock_high()
+        yield from self._high_remaining(2 * q - self.sample_delay)
+        self._scl(0)
+        yield q
+        self._sda(1)
+        self.reads.append(val)
+
+    def _run(self):
+        yield self.start_at
+        for op in self.script:
+            k = op[0]
+            q = self.period // 4
+            if k == "start":
+                if self.join_start:
+                    yield lambda: self.sda == 0 and self.scl == 1   # someone else just STARTed
                 else:
-                    self.state = "idle"
+                    yield from self._wait_bus_free()
+                self._sda(0)                          # START: SDA falls while SCL high
+                yield q
+                self._scl(0)
+                yield q
+            elif k == "write":
+                ok = yield from self._write_byte(op[1])
+                if not ok:
+                    return
+            elif k == "read":
+                yield from self._read_byte(op[1])
+            elif k == "repstart":
+                self._sda(1)
+                yield q
+                self._scl(1)
+                yield lambda: self.scl == 1
+                yield q
+                self._sda(0)                          # repeated START: SDA falls while SCL high
+                yield q
+                self._scl(0)
+                yield q
+            elif k == "stop":
+                self._sda(0)
+                yield q
+                self._scl(1)
+                yield lambda: self.scl == 1
+                yield q
+                self._sda(1)
+                yield q
+                self.stops += 1
+            else:
+                raise ValueError(k)
+        self._release_all()
