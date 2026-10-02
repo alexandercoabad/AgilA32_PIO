@@ -59,3 +59,26 @@ mirror cases fail.
 
 Note: data-byte arbitration (loss at bit 2 of a data byte, both directions) was already covered by
 `test_mm_pio_wins_arbitration` and `test_mm_pio_loses_arbitration_releases_bus_and_retries`.
+
+## Addendum: bus-busy limitation of `i2c_mm.pio`, documented and reproduced (53 -> 57 tests, all pass)
+`pio/i2c_mm.pio` has no bus-busy detection: it never checks that the bus is free before a START and does
+not follow START / STOP. Found by starting the PIO master part-way through another master's transaction
+(the model master, which does wait for bus-free) at eight different offsets:
+- **2 of 8 destroyed the other master's transaction.** At +30 clocks (its address byte) the PIO's START was
+  a second START for the slave: all four bytes NAKed, garbage captured. At +1500 (data byte 3) byte `0x55`
+  arrived as `0x6C` and the last two bytes were NAKed. In both the PIO also raised IRQ 1 ("lost"), so that
+  flag does not prove the winner is unharmed.
+- **6 of 8 were harmless** (SDA already low or SCL low when the START edge arrived). A passing bench is
+  therefore not evidence of safety; the existing multi-master tests all START both masters together
+  (`join_start=True`), which is the one case arbitration handles.
+- **Mitigation, verified:** the host reads `PINS_IN` until SDA and SCL are both high for 128 clocks before
+  queueing the START (and again before retrying after a loss). With it all eight timings give two clean
+  transactions (other master's four bytes, then the PIO's `A0 33`).
+- **Not covered by the mitigation:** another master starting between the host's check and the START (the
+  CPU's step is thousands of clocks, so the window is wide); a bus held low by a stuck slave (no timeout,
+  no recovery clocks). A real fix is a bus-free wait inside the PIO program; five words are free, not tried.
+New tests, kept as a reproducer for the numbers above: `test_mm_no_bus_busy_check_start_in_the_address_byte_destroys_the_other_master`,
+`test_mm_no_bus_busy_check_start_in_a_data_byte_corrupts_it` (these two assert the limitation, so they must
+be changed together with the docs if the program ever gains a check), and
+`test_mm_host_bus_free_wait_protects_the_other_master_early` / `_late`.
+Also: a comment block in `pio/i2c_mm.pio` and a note in `docs/info.md`, `README.md`. No RTL or program-code change.

@@ -14,7 +14,7 @@ from-scratch RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make` in `test/`): **53 cocotb protocol tests**
+**Test counts** (all run by `make` in `test/`): **57 cocotb protocol tests**
 (`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 11 PIO Verilog
 testbenches**: 8 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
 `tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`) and 3 that
@@ -31,7 +31,7 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 | UART -> SPI -> I2C on one state machine | PIO, reprogrammed by CPU at run time | Done | `tb_pio_cpu_multi.v` (all three waveforms, strictly in sequence) |
 | I2C slave, write direction (`i2c_slave_rx`: address match, ACK, N data bytes into the RX FIFO) | PIO, 29 of 32 words | Done in simulation; bounded to `WRITE_BYTES` per transaction by design; needs SCL period >= 32 clocks (keep >= 40) | 5 cocotb tests (write, other address / read request ignored, buffer-full NAK, repeated START, single-byte mode with 0x00/0xFF/0x01/0x80) + `tb_pio_cpu_i2c_slave.v` (see below) |
 | I2C slave, read direction (`i2c_slave_tx`: address match, ACK, bytes from the TX FIFO, clock stretching while the FIFO is empty) | PIO, 32 of 32 words | Done in simulation; same SCL limit | 4 cocotb tests (4-byte read, 3000-clock stretch, writes ignored, 12-byte read with FIFO refill) + the SCL-speed sweep |
-| I2C multi-master master (`i2c_mm`: bit-level arbitration, clock synchronisation) | PIO, 27 of 32 words | Done in simulation | 10 cocotb tests (no false arbitration loss, wins, loses and releases both lines then retries, loses inside the address byte, slower second master, identical frames where neither loses, loss decided on the last bit of a byte in both directions, read-versus-write to the same address in both directions) |
+| I2C multi-master master (`i2c_mm`: bit-level arbitration, clock synchronisation) | PIO, 27 of 32 words | Done in simulation. **No bus-busy detection**: a START is issued whether or not another master is mid-transaction and can destroy that transaction (2 of 8 timings tried); the host must wait for the bus to be free first (see docs/info.md) | 10 cocotb tests (no false arbitration loss, wins, loses and releases both lines then retries, loses inside the address byte, slower second master, identical frames where neither loses, loss decided on the last bit of a byte in both directions, read-versus-write to the same address in both directions) |
 | One I2C device that is both slave directions (register file: write pointer, then repeated START + read) | PIO | Not possible as is: the two slave programs need 29 + 32 words and the instruction memory has 32; they can only be swapped at run time | -- |
 | I2C slave driven by the CPU: master writes `A5 3C` to 0x42, CPU reads them off the RX FIFO, adds 1, swaps the PIO to the read-slave program, halts; master reads back `A6 3D` | PIO reprogrammed by the CPU between two slave programs | Done in simulation | `tb_pio_cpu_i2c_slave.v` (ACKs, bytes, CPU parked during the read; mutation-checked: CPU adding 2 instead of 1 fails the bench) |
 | PS/2 keyboard, CPU bit-bang | CPU firmware over flash pages (not PIO) | Works only against a slowed-down keyboard | `tb_ps2_reader.v`, `tb_ps2_ascii.v` (the testbench holds each CLOCK level for 4000 clocks; a real keyboard's is 30-50 us, and one flash page switch costs about 3000 clocks -- see `docs/info.md`) |
@@ -149,7 +149,7 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 53 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 57 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
@@ -185,13 +185,14 @@ shifters, with behaviour unchanged (all PIO testbenches still pass). The
 register timing estimate from a Yosys JSON netlist and a liberty file.
 
 **Honest limits.** Two state machines (the RP2040 has eight), a shared
-32-word instruction memory, pins 0-9 only, and a 1 MHz clock in `info.yaml`.
+32-word instruction memory, pins 0-9 only, and a 24 MHz clock in `info.yaml` (the flow has not yet been re-run at that period; the last GDS run used a relaxed 1 MHz target).
 The CPU costs about 3000 clock cycles per queued word (flash paging), so a
 bus must be slower than that per byte for firmware to stay ahead of it -- the
 FIFOs and the halt-and-continue behaviour above are how this is worked
-around. All four SPI modes are also run end to end from CPU firmware (`tb_pio_cpu_spi4.v`); firmware must set the SCK bit in `GPIO_OUT` before the first `PIN_OWN`, and any forced instruction on an SM with plain side-set must carry the idle SCK level in bit 12, or SCK glitches. UART, SPI (modes 0-3) and I2C master are demonstrated in simulation. Low-speed USB
-and 10BASE-T (the brief's stretch goals) are not attempted here, and nothing
-has been measured on silicon yet.
+around. All four SPI modes are also run end to end from CPU firmware (`tb_pio_cpu_spi4.v`); firmware must set the SCK bit in `GPIO_OUT` before the first `PIN_OWN`, and any forced instruction on an SM with plain side-set must carry the idle SCK level in bit 12, or SCK glitches. UART, SPI (modes 0-3) and I2C master are demonstrated in simulation. Low-speed USB host
+is done in simulation only, with a receive clock tolerance of just about -0.5 % to +0.8 %; 10BASE-T
+(the other stretch goal) is not attempted (it needs a frame buffer, at least 40 MHz and external
+magnetics), and nothing has been measured on silicon yet.
 
 ## Layout
 
@@ -326,15 +327,15 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       (`test/tb_timer_pwm.v`, `test/tb_ebreak_halt.v`,
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all wired into CI, all gating the
-      build, all 11 cocotb tests + all 25 standalone tests (15 CPU and
-      peripheral, 10 PIO) + the 53 PIO protocol cocotb tests currently
+      build, all 11 cocotb tests + all 26 standalone tests (15 CPU and
+      peripheral, 11 PIO) + the 53 PIO protocol cocotb tests currently
       passing
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
       screen. The first plan -- interleave the polled PS/2 reader and the
       bit-banged display driver in one program -- cannot work: this core has
       no interrupts, one flash page switch costs about 3000 clocks, a real
-      PS/2 CLOCK edge arrives every 30-50 us (30-50 core clocks at 1 MHz), and
+      PS/2 CLOCK edge arrives every 30-50 us (720-1200 core clocks at 24 MHz, against about 3000 clocks per flash page switch), and
       the current ST7789 fill spends about 17 pages per pixel. The plan now
       moves both time-critical jobs into the PIO. **Done (simulation only):**
       PS/2 reception on its own state machine (`pio/ps2_rx.pio`; the 4-deep RX
