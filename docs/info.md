@@ -925,7 +925,7 @@ turnaround, NAK, receiver alone (`rx_start`), 12 random packets, clock-error swe
 bit-for-bit by a Verilog device, the 4 RX words match, and the core had halted before the device
 replied.
 
-#### I2C slave and multi-master (feature 13)
+#### I2C slave and multi-master (feature 12)
 
 Three more programs for the same state machines, no RTL change. All use SDA = PIO pin 8 (`uio[4]`),
 SCL = PIO pin 9 (`uio[5]`), and the same PINDIR convention as `i2c.pio` (PINDIR = 1 pulls the line
