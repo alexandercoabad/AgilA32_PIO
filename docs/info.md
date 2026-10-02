@@ -870,7 +870,7 @@ memory (`ps2_rx` loaded at origin 8; every one of the 1536 SCK edges happened du
 checks: replacing `mov isr, null` with a jump, or making the timeout never expire, fails the partial-frame
 test; shortening the timeout to `set x, 3` fails all five fast tests.
 
-*Not done:* a CPU-driven top-level demo (flash image + `tt_um_agila32` testbench) for this receiver; host-to-
+*Not done:* host-to-
 device commands (LED set, reset), which need CLOCK/DATA driven open-drain on the `uio[5:4]` pins (pins 8/9)
 instead of the read-only `ui_in[3]` / `ui_in[4]`; inhibiting the keyboard by holding CLOCK low for flow
 control (same requirement); anything on a real keyboard. The modeled keyboard is my reading of the PS/2
@@ -970,3 +970,25 @@ queues the two words and executes `EBREAK`. The master then reads two bytes and 
 core halted. It exercises exactly the thing a combined slave would need and cannot have at 29 + 32
 words: the CPU does the bookkeeping between two direction-specific programs. Mutation check: making
 the CPU add 2 instead of 1 fails the bench (`read back a7 3e`).
+
+**CPU-driven PS/2 receiver demo (feature 13).** `tools/build_pio_ps2_rx.py` + `test/tb_pio_cpu_ps2.v`.
+The CPU loads `ps2_rx.pio` (CLKDIV 17: 288 PIO cycles x 17 = 4896 clocks = 204 us at 24 MHz, inside the
+program's own 100-300 us rule), configures `IN_BASE = 4`, `JMP_PIN = 3`, autopush at 11 bits, enables it,
+and **sleeps** for about 153000 clocks. Meanwhile the bench's keyboard types `A down, A up, B down, B up,
+C down` (`1C | F0 1C | 32 | F0 32 | 21`) at a **real 10 kHz** (2400 clocks per bit at 24 MHz, DATA changing
+mid-CLOCK-high, odd parity, 7200 clocks between frames). When the first four frames are in, the bench
+looks inside the RX FIFO: all four are there intact (start 0, odd parity, stop 1, right data) with the CPU
+still asleep. The CPU then wakes, drains four frames, polls for the other three, and writes each scancode
+(`(word >> 22) & 0xFF`) to `uo_out`; the bench requires all 7 in order. This is the case the polled reader
+(`build_ps2_reader.py`, one ~3000-clock flash page per CLOCK edge) could not handle: its 2400-clock edges
+are shorter than one page switch.
+*Mutation checks:* CLKDIV 2 (idle timeout 576 clocks, shorter than CLOCK-high) -> the receiver resyncs
+mid-frame and the FIFO holds 0 frames (FAIL); the CPU decoding `>> 21` instead of `>> 22` -> every
+scancode wrong (FAIL). Both restored byte-identical.
+*Measured while building it:* the CPU's 2-instruction delay loop takes about **274 clocks per pass** in
+these benches (qspi_div_sel = 0), not the ~14 the `delay()` helper assumed; `delay()` therefore over-waits by
+about 27x (harmless for the earlier demos, which only needed protocols to finish), and the new
+`PioHost.delay_iterations(n)` gives an exact pass count. The first version of this demo asked for 170000
+clocks via `delay()` and slept for 4.6 million.
+*Not done:* host-to-device commands (needs CLOCK/DATA open-drain on `uio[5:4]`), real-keyboard
+measurements, scancode-to-ASCII on top of the receiver.

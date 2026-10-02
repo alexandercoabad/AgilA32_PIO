@@ -15,9 +15,9 @@ from-scratch RISC-V core is where this whole line of projects started.
 ## Protocol coverage
 
 **Test counts** (all run by `make` in `test/`): **53 cocotb protocol tests**
-(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 10 PIO Verilog
-testbenches**: 7 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
-`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`) and 3 that
+(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 11 PIO Verilog
+testbenches**: 8 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
+`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`) and 3 that
 drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 
 | Protocol | Runs on | Status | Verified by |
@@ -35,7 +35,7 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 | One I2C device that is both slave directions (register file: write pointer, then repeated START + read) | PIO | Not possible as is: the two slave programs need 29 + 32 words and the instruction memory has 32; they can only be swapped at run time | -- |
 | I2C slave driven by the CPU: master writes `A5 3C` to 0x42, CPU reads them off the RX FIFO, adds 1, swaps the PIO to the read-slave program, halts; master reads back `A6 3D` | PIO reprogrammed by the CPU between two slave programs | Done in simulation | `tb_pio_cpu_i2c_slave.v` (ACKs, bytes, CPU parked during the read; mutation-checked: CPU adding 2 instead of 1 fails the bench) |
 | PS/2 keyboard, CPU bit-bang | CPU firmware over flash pages (not PIO) | Works only against a slowed-down keyboard | `tb_ps2_reader.v`, `tb_ps2_ascii.v` (the testbench holds each CLOCK level for 4000 clocks; a real keyboard's is 30-50 us, and one flash page switch costs about 3000 clocks -- see `docs/info.md`) |
-| PS/2 keyboard receiver | PIO (`ps2_rx`, own state machine) | Done at the `pio.v` level (not yet CPU-driven end to end) | 7 cocotb tests against a PS/2 keyboard model: keystroke traffic incl. extended keys, 10 and 16.7 kHz CLOCK, 4-frame FIFO burst while the CPU is busy, FIFO overflow + recovery, idle-timeout resync after a partial frame, bad parity / stop bit reported to the CPU, and running next to an SPI master on another state machine |
+| PS/2 keyboard receiver | PIO (`ps2_rx`, own state machine) | Done in simulation, at the `pio.v` level **and CPU-driven end to end** (`tb_pio_cpu_ps2.v`: real 10 kHz keyboard at 24 MHz; the CPU sleeps while 4 frames wait in the RX FIFO, then reads all 7 scancodes) | 7 cocotb tests against a PS/2 keyboard model: keystroke traffic incl. extended keys, 10 and 16.7 kHz CLOCK, 4-frame FIFO burst while the CPU is busy, FIFO overflow + recovery, idle-timeout resync after a partial frame, bad parity / stop bit reported to the CPU, and running next to an SPI master on another state machine |
 | SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
 | SWD, CAN | PIO | Not attempted | -- |
 | Low-speed USB host engine (1.5 Mb/s: token/data TX with NRZI + bit stuffing + EOP, reply RX) | PIO (`usb_ls`, 29 of 32 instruction words, one state machine) | Done in simulation at 24 MHz (CLKDIV 2); receive clock tolerance only about -0.5 % to +0.8 % (see below) | 7 cocotb tests against a low-speed device model (token waveform edge-by-edge, max-stuffing DATA1, IN -> DATA1 turnaround, NAK, receiver alone, 12-packet fuzz, clock-error sweep) + `tb_pio_cpu_usb.v` (CPU queues an IN token and halts; PIO sends it, turns the bus around and captures the 8-byte reply) |
@@ -338,8 +338,8 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       the current ST7789 fill spends about 17 pages per pixel. The plan now
       moves both time-critical jobs into the PIO. **Done (simulation only):**
       PS/2 reception on its own state machine (`pio/ps2_rx.pio`; the 4-deep RX
-      FIFO holds frames while the CPU is busy). **Still open:** wiring the
-      receiver into a CPU-driven top-level demo, a PIO glyph expander (1-bit
+      FIFO holds frames while the CPU is busy). **CPU-driven demo done**
+      (`tb_pio_cpu_ps2.v`, feature 13). **Still open:** a PIO glyph expander (1-bit
       font rows -> RGB565 pixels over SPI), the font, scancode-to-ASCII in
       the terminal loop, and the renderer itself. Nothing here has run on a
       real keyboard or display.

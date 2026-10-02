@@ -265,10 +265,13 @@ class PioHost:
         self._li(self.TMP, value)
         self.p.page.SB(self.TMP, 0, 0xF0)
 
-    def delay(self, clocks):
-        """Busy-wait for AT LEAST `clocks` core clocks (a 2-instruction countdown loop, at least
-        ~14 clk per iteration, so iterations = clocks // 10 always over-waits). One atomic op."""
-        n = max(1, clocks // 10)
+    def delay_iterations(self, n):
+        """Busy-wait for exactly `n` passes of a 2-instruction countdown loop (ADDI / BNE), one atomic
+        op. MEASURED on this core with the testbenches' fast QSPI setting (qspi_div_sel = 0): about
+        274 core clocks per pass (~137 per instruction: the loop runs out of the paged flash window),
+        so n = 560 sleeps about 153000 clocks. With a slower QSPI divider it is slower still -- re-measure
+        before relying on a particular duration."""
+        n = max(1, int(n))
         self._reserve(self._li_bytes(n) + 8)
         self._li(self.TMP, n)
         self._delay_n = getattr(self, "_delay_n", 0) + 1
@@ -278,25 +281,16 @@ class PioHost:
         a.ADDI(self.TMP, self.TMP, -1)
         a.BNE(self.TMP, 0, lbl)
 
-    def wait_rx_ready(self, sm):
-        """Spin until RX FIFO `sm` holds a word (FSTAT.RXEMPTY[sm] == 0). One atomic page op;
-        leaves PIO_IDX pointing at FSTAT. Uses x6/x7."""
-        self._reserve(self._li_bytes(R_FSTAT) + 4 + 4 * 4)
-        self._li(self.TMP, R_FSTAT)
-        a = self.p.page
-        a.SW(self.TMP, 0, PIO_IDX)
-        self._rxw_n = getattr(self, "_rxw_n", 0) + 1
-        lbl = "rxw%d" % self._rxw_n
-        a.ADDI(6, 0, 1 << (8 + sm))                  # mask = RXEMPTY[sm]
-        a.label(lbl)
-        a.LW(7, 0, PIO_DATA)
-        a.AND(7, 7, 6)
-        a.BNE(7, 0, lbl)
+    def delay(self, clocks):
+        """Busy-wait for AT LEAST `clocks` core clocks: clocks // 10 passes of the countdown loop.
+        A pass really takes ~274 clocks (see delay_iterations), so this over-waits by ~27x --
+        harmless where a protocol merely has to be finished, wrong where timing matters (use
+        delay_iterations there)."""
+        self.delay_iterations(max(1, clocks // 10))
 
     def rx_get(self, sm, rd):
-        """LW rd <- RX FIFO of `sm` (pops one word)."""
-        self.write_idx(sm_reg(sm, SM_RXF))
-        self.read_data(rd)
+        """Alias of rx_pop (kept for build_pio_i2c_slave.py)."""
+        self.rx_pop(sm, rd)
 
     def byte_plus1_to_i2c_slave_word(self, rd):
         """rd = RX word (byte in bits [7:0]) -> TX word that makes the I2C-slave program send
@@ -308,6 +302,14 @@ class PioHost:
         a.XORI(rd, rd, -1)
         a.ANDI(rd, rd, 0xFF)
         a.SLLI(rd, rd, 24)
+
+    def ps2_frame_to_byte(self, rd):
+        """rd = RX word of pio/ps2_rx.pio (frame in bits [31:21]) -> the data byte, (word >> 22) & 0xFF.
+        Start / parity / stop are not judged here (see decode_ps2_word in test/pio_tb_lib.py)."""
+        self._reserve(2 * 4)
+        a = self.p.page
+        a.SRLI(rd, rd, 22)
+        a.ANDI(rd, rd, 0xFF)
 
     def write_data_reg(self, rs):
         """SW rs -> PIO_DATA (the register picked by the last write_idx)."""
