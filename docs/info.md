@@ -1061,3 +1061,23 @@ measure bit periods and fails the other three).
 
 *Not done:* a real strip; level shifting (WS2812 data inputs typically want about 0.7 x VDD, so a 5 V strip usually needs a 3.3 V -> 5 V shifter -- I have not checked your strip); a repeat-colour program for long strips;
 a DMA-like feed; an RGBW top-level demo.
+
+**1-Wire master (`pio/onewire.pio`).** One open-drain line (DQ = PIO pin 8 = uio[4], external pull-up about 4.7 kOhm). `set pindirs, 1` pulls DQ low, `set pindirs, 0` releases it, `in pins, 1` reads it. Standard speed, 1 us tick (CLKDIV 24 at 24 MHz). 31 of 32 instruction words.
+
+Each transfer is one FIFO word: bit 0 = op (0 reset, 1 transfer), bits [5:1] = n-1 (1..26 bits), bits [31:6] = data, LSB first; a read sends ones. Every command pushes exactly one RX word: for a reset, bit 31 is the presence level (0 = a device answered); for a transfer, the sampled bits (first slot in bit 32-n, last in bit 31).
+
+| | PIO ticks (1 us) | spec |
+|---|---|---|
+| reset low | 530 | 480-960 us |
+| presence sampled | about 69 us after release | 15-60 us delay + 60-240 us pulse |
+| recovery after reset | 429 | at least 480 us before the next slot (reset tail plus command overhead) |
+| write-1 / read slot low | 3 | 1-15 us |
+| read sample point | 13 us after the fall | before the 15 us hold ends |
+| write-0 low | 65 | 60-120 us |
+| slot length | 70-71 | 60-120 us |
+
+*Findings from the device model (`OneWireSlave`).* Read-0 hold margin: a device that releases the line after 10 or 12 us is read as a 1; 13 us and longer works. Clock tolerance: the fast limit is about CLKDIV 22.15 (-7.7 %, write-0 low drops below 60 us); the slow limit is about 27.7 (+15 %, the sample point passes the 15 us hold). The program needs a 24 MHz clock; at another clock, change CLKDIV so one tick is 1 us.
+
+*CPU-driven demo (`tools/build_pio_onewire.py`, `test/tb_pio_cpu_onewire.v`).* The CPU resets the bus (LED_OUT = 0xA0 present / 0xA1 absent), sends READ ROM (0x33), reads 8 bytes and shows each on LED_OUT. The testbench decodes the bus itself, checks CRC-8 (poly 0x8C reflected), the reset and gap lengths, the command byte and all 64 read slots, and flags any slot violation.
+
+*Not done:* overdrive speed, strong pull-up (needs a second pin), ROM search (CPU code on top of 1-bit transfers), a real device.

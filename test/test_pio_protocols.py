@@ -20,7 +20,7 @@ from pio_tb_lib import I2cMaster
 from pio_i2c_slave import (I2cSlaveRx, I2cSlaveTx, PIN_OWN_MASK as SL_OWN, INIT_INSTRS as SL_INIT, tx_word)
 from pio_i2c_mm import (I2cMM, SM_CONFIG as MM_CONFIG, PIN_OWN_MASK as MM_OWN, IRQ_LOST, IRQ_NAK,
                         shift_ctrl as mm_shift, MOV_ISR_NULL as MM_MOV_ISR_NULL)
-from pio_tb_lib import (PioBus, World, Wire, SerialSource, SpiSlave, I2cSlave, decode_uart,
+from pio_tb_lib import (OneWireSlave, make_rom, crc8_maxim, PioBus, World, Wire, SerialSource, SpiSlave, I2cSlave, decode_uart,
                         Ps2Keyboard, decode_ps2_word, Ws2812Strip,
                         assemble, sm_reg, R_CTRL, R_IRQ, R_FSTAT, R_PIN_OWN, R_SYNC_BYP,
                         R_PINS_IN, R_INFO, R_IMEM, SM_ADDR, SM_INSTR, SM_TXF, SM_EXEC,
@@ -1550,3 +1550,204 @@ async def test_ws2812_rgbw_32_bit_pixels(dut):
     assert len(strip.frames) == 1
     assert Ws2812Strip.pixels(strip.frames[0], nbits=32) == words
     assert strip.period_clk == [WS_BIT_CLK] * (3 * 32 - 1)
+
+
+# ============================================================================= 1-Wire
+US = 24                                                    # clocks per microsecond (24 MHz; CLKDIV 24 = 1 us tick)
+
+
+def ow_xfer(nbits, data):
+    """Command word: op 1, n-1 in [5:1], TX data (LSB first) from bit 6."""
+    assert 1 <= nbits <= 26
+    return 1 | ((nbits - 1) << 1) | ((data & ((1 << nbits) - 1)) << 6)
+
+
+def ow_read(nbits):
+    return ow_xfer(nbits, (1 << nbits) - 1)               # a read slot is a write-1 slot
+
+
+OW_RESET = 0
+
+
+async def ow_setup(dut, slave=None, div=(24, 0)):
+    """SM0 = pio/onewire.pio on pad 8: SET and IN both based at pin 8, 1 PIO tick = div clocks."""
+    bus, world = await setup(dut)
+    prog = load_src("onewire.pio")
+    await bus.load_program(prog)
+    await bus.sm_setup(0, prog, set_base=8, set_count=1, in_base=8, div=div)
+    await bus.write(R_PIN_OWN, 0x100)
+    if slave is not None:
+        world.devs.append(slave)
+    await bus.set_enable(0)
+    return bus, world, prog
+
+
+async def ow_cmd(bus, word, limit=400000):
+    """Push one command and return the single RX word it produces."""
+    await bus.tx_put_blocking(0, word)
+    for _ in range(limit):
+        if await bus.rx_level(0):
+            return await bus.rx_get(0)
+    raise TimeoutError("no RX word for command %#x" % word)
+
+
+async def ow_session(bus, steps):
+    """Run (word, rx_shift) steps; returns the list of decoded results (None for writes)."""
+    out = []
+    for word, sh in steps:
+        w = await ow_cmd(bus, word)
+        out.append(None if sh is None else w >> sh)
+    return out
+
+
+@cocotb.test()
+async def test_onewire_reset_and_presence(dut):
+    """Reset pulse is 480..960 us, a present device is seen (bit 31 = 0), and the controller leaves
+    >= 480 us of recovery before the next slot. Device answering as LATE as 60 us after the release and
+    as SHORT as 60 us (the guaranteed-overlap window is 60..75 us) and the earliest/shortest, 15 us..75 us,
+    are both detected."""
+    for delay, length in ((30, 120), (60, 60), (15, 60), (60, 240)):
+        slave = OneWireSlave(us=US, presence_delay=delay, presence_len=length)
+        bus, world, prog = await ow_setup(dut, slave)
+        await bus.tx_put(0, OW_RESET)
+        await bus.tx_put(0, ow_xfer(1, 1))                  # one slot right behind the reset
+        await bus.set_enable(0)
+        w0 = await bus.rx_get(0) if await bus.rx_level(0) else None
+        while w0 is None:
+            if await bus.rx_level(0):
+                w0 = await bus.rx_get(0)
+        assert (w0 >> 31) == 0, "presence not seen for device answering at %d us for %d us" % (delay, length)
+        for _ in range(100000):
+            if await bus.rx_level(0):
+                await bus.rx_get(0)
+                break
+        t_fall, low = slave.resets[0]
+        assert 480 * US <= low <= 960 * US, "reset low %.1f us" % (low / US)
+        gap = slave.slots[0][0] - (t_fall + low)
+        assert gap >= 480 * US, "only %.1f us between the reset release and the next slot" % (gap / US)
+        assert not slave.violations, slave.violations
+        world.devs.clear()
+        await bus.set_enable(0, False)                        # next iteration builds a fresh SM state below
+        await bus.fifo_clear(0)
+        await bus.write(sm_reg(0, SM_INSTR), 0)               # jmp 0 (program start)
+        await ClockCycles(dut.clk, 4)
+
+
+@cocotb.test()
+async def test_onewire_absent_device(dut):
+    """No device: the line stays high, so presence reads 1 and a read returns all ones."""
+    bus, world, prog = await ow_setup(dut, OneWireSlave(us=US, present=False))
+    await bus.set_enable(0)
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_read(8), 24)])
+    assert r == [1, 0xFF], r
+
+
+@cocotb.test()
+async def test_onewire_write_slot_timing(dut):
+    """Write 0x33 after a reset. The device decodes it LSB first (bits 1,1,0,0,1,1,0,0), and every slot
+    is within the spec windows: write-1 low 3 us, write-0 low 65 us, slots 60..80 us apart, with no
+    low pulse the device could misread."""
+    slave = OneWireSlave(us=US)
+    bus, world, prog = await ow_setup(dut, slave)
+    await bus.set_enable(0)
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None)])
+    await ow_cmd(bus, ow_read(1))                              # one more slot: waits until the write is done
+    assert r[0] == 0
+    assert slave.cmds == [[0x33]], slave.cmds
+    assert [b for _, _, b in slave.slots[:8]] == [1, 1, 0, 0, 1, 1, 0, 0]
+    for t_fall, low, bit in slave.slots[:8]:
+        want = 3 if bit else 65
+        assert abs(low - want * US) <= 2, "write-%d low pulse %.2f us, wanted %d" % (bit, low / US, want)
+    falls = [t for t, _, _ in slave.slots[:8]]      # the 9th slot follows a command boundary
+    gaps = [(b - a) / US for a, b in zip(falls, falls[1:])]
+    assert all(60 <= g <= 80 for g in gaps), "slot spacing out of 60..80 us: %s" % gaps
+    assert not slave.violations, slave.violations
+
+
+@cocotb.test()
+async def test_onewire_read_rom(dut):
+    """The classic READ ROM (0x33): the device returns family code, 6 serial bytes and the CRC. Read 8
+    bytes one command each, then again as 3 bytes in a single 24-bit transfer + 5 in 8-bit ones; the CRC-8
+    of all 8 bytes must be 0. The device holds each 0 for only 15 us (the spec minimum), so this also
+    proves the controller samples early enough."""
+    rom = make_rom(0x28, (0x6B, 0x13, 0x9C, 0x00, 0xA4, 0x07))
+    slave = OneWireSlave({0x33: rom}, us=US)
+    bus, world, prog = await ow_setup(dut, slave)
+    await bus.set_enable(0)
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None)] + [(ow_read(8), 24)] * 8)
+    got = r[2:]
+    assert got == rom, [hex(x) for x in got]
+    assert crc8_maxim(got) == 0
+    assert slave.cmds == [[0x33]]
+    # same ROM again: 24-bit transfer (word >> 8), then five single bytes
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None), (ow_read(24), 8)]
+                         + [(ow_read(8), 24)] * 5)
+    assert r[2] == rom[0] | (rom[1] << 8) | (rom[2] << 16), hex(r[2])
+    assert r[3:] == rom[3:], [hex(x) for x in r[3:]]
+    assert await bus.rx_level(0) == 0, "exactly one RX word per command"
+    assert not slave.violations, slave.violations
+
+
+@cocotb.test()
+async def test_onewire_partial_bit_counts(dut):
+    """Transfers need not be bytes: 3 bits then 5 bits make one command byte at the device (LSB first
+    across the two commands), and a 5-bit read lands in the top 5 bits of the RX word."""
+    slave = OneWireSlave({0x5E: [0b10110]}, us=US)
+    bus, world, prog = await ow_setup(dut, slave)
+    await bus.set_enable(0)
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(3, 0b110), None), (ow_xfer(5, 0b01011), None),
+                               (ow_read(5), 27)])
+    assert slave.cmds == [[0x5E]], [hex(c) for c in slave.cmds[0]]
+    assert r[3] == 0b10110, bin(r[3])
+
+
+@cocotb.test()
+async def test_onewire_read_hold_margin(dut):
+    """How early may a device release a read-0 and still be read correctly? The spec guarantees 15 us;
+    the controller samples at 13 us after the fall. Reports the window and requires only the
+    guaranteed 15 us (and 14 us) to work."""
+    ok = {}
+    for hold in (10, 12, 13, 14, 15, 30):
+        slave = OneWireSlave({0x33: [0x00, 0x00]}, us=US, read_hold=hold)
+        bus, world, prog = await ow_setup(dut, slave)
+        await bus.set_enable(0)
+        r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None), (ow_read(16), 16)])
+        ok[hold] = (r[2] == 0)
+        world.devs.clear()
+        await bus.set_enable(0, False)
+        await bus.fifo_clear(0)
+    dut._log.info("1-Wire read-0 hold (device releases N us after the fall): %s" % {
+        k: ("ok" if v else "FAIL") for k, v in ok.items()})
+    assert ok[14] and ok[15] and ok[30], ok
+
+
+@cocotb.test()
+async def test_onewire_clock_tolerance(dut):
+    """One PIO tick should be 1 us. Sweep the fractional CLKDIV around 24 and report which tick lengths
+    still do reset + presence + READ ROM (first two bytes) with no timing violation at the device.
+    Limits seen by a typical device (presence 30..150 us): FAST end, CLKDIV ~22.15 (-7.7 %): the write-0
+    low pulse (65 ticks) drops under the 60 us minimum; SLOW end, CLKDIV ~27.7 (+15 %): the read sample
+    (13 ticks after the fall) passes the 15 us a device holds a 0. A worst-case device whose presence
+    pulse is only guaranteed over 60..75 us would cut the slow end to ~26.5 (+10 %). The window must
+    include +-5 %."""
+    rom = make_rom()
+    results = {}
+    for d in (22.0, 22.8, 24.0, 25.2, 27.0, 28.0):
+        div = (int(d), int(round((d - int(d)) * 256)))
+        slave = OneWireSlave({0x33: rom}, us=US)
+        bus, world, prog = await ow_setup(dut, slave, div=div)
+        await bus.set_enable(0)
+        try:
+            r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None), (ow_read(16), 16)])
+            good = (r[0] == 0 and r[2] == (rom[0] | rom[1] << 8) and slave.cmds == [[0x33]]
+                    and not slave.violations)
+        except TimeoutError:
+            good = False
+        results[d] = good
+        world.devs.clear()
+        await bus.set_enable(0, False)
+        await bus.fifo_clear(0)
+    dut._log.info("1-Wire clock tolerance (CLKDIV, 24.0 = exactly 1 us/tick): %s" % {
+        "%.1f" % k: ("ok" if v else "FAIL") for k, v in results.items()})
+    for d in (22.8, 24.0, 25.2):
+        assert results[d], "must work at CLKDIV %.1f (%+.1f %%): %s" % (d, (d / 24 - 1) * 100, results)

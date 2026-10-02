@@ -311,6 +311,11 @@ class PioHost:
         a.SRLI(rd, rd, 22)
         a.ANDI(rd, rd, 0xFF)
 
+    def add_imm(self, rd, imm):
+        """rd += imm (ADDI, -2048..2047)."""
+        self._reserve(4)
+        self.p.page.ADDI(rd, rd, imm)
+
     def write_data_reg(self, rs):
         """SW rs -> PIO_DATA (the register picked by the last write_idx)."""
         self._reserve(4)

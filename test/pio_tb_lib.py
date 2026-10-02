@@ -845,3 +845,125 @@ class I2cMaster:
             else:
                 raise ValueError(k)
         self._release_all()
+
+
+# ----------------------------------------------------------------------------- 1-Wire
+def crc8_maxim(data):
+    """Dallas/Maxim 1-Wire CRC-8 (x^8 + x^5 + x^4 + 1, reflected).  crc8_maxim(rom_with_crc) == 0."""
+    crc = 0
+    for b in data:
+        crc ^= b
+        for _ in range(8):
+            crc = (crc >> 1) ^ 0x8C if crc & 1 else crc >> 1
+    return crc
+
+
+def make_rom(family=0x28, serial=(0x11, 0x22, 0x33, 0x44, 0x55, 0x66)):
+    rom = [family] + list(serial)
+    return rom + [crc8_maxim(rom)]
+
+
+class OneWireSlave:
+    """1-Wire device on pad 8 (open drain, wired-AND with the PIO).  Time is in clocks; `us` is how
+    many clocks make one microsecond (24 at this chip's 24 MHz, which with CLKDIV 24 is a 1 us tick).
+
+    Behaviour (Maxim standard speed):
+      * a master low pulse >= `reset_min` us is a RESET: the device answers `presence_delay` us after the
+        release with a `presence_len` us low pulse (unless present=False);
+      * after a reset the device collects 8 bits LSB-first per command byte; a write slot is read as 0 if
+        the master is still low 30 us after the falling edge, else 1;
+      * a command byte listed in `responses` makes the device send those bytes (LSB first, one bit per
+        read slot): for a 0 it pulls the line low from the falling edge for `read_hold` us (the spec
+        guarantees >= 15), for a 1 it leaves the line alone. Beyond the list it sends 1s.
+    Flags (in `violations`) anything a real device could not cope with: a low pulse < 1 us, a low pulse
+    that is neither a write-1/read slot (<= 15 us), a write-0 (60..120 us) nor a reset, a slot starting
+    < 60 us after the previous one, or < 1 us of recovery."""
+
+    def __init__(self, responses=None, present=True, us=24, read_hold=15, presence_delay=30,
+                 presence_len=120, reset_min=480):
+        self.us = us
+        self.responses = {k: list(v) for k, v in (responses or {}).items()}
+        self.present = present
+        self.read_hold, self.presence_delay = read_hold, presence_delay
+        self.presence_len, self.reset_min = presence_len, reset_min
+        self.mode = "idle"                 # idle until the first reset
+        self.cmd_bits = []
+        self.tx_bits = []
+        self.cmds = []                     # bytes received, one list per reset
+        self.sent = []                     # bits the device offered in read slots
+        self.slots = []                    # (fall_cycle, low_clks, bit_or_None)
+        self.resets = []                   # (fall_cycle, low_clks)
+        self.violations = []
+        self.ml_prev = 0
+        self.t_fall = self.t_rise = None
+        self.last_fall = None
+        self.drive_from = self.drive_until = 0
+        self.pending_presence = None
+        self._now = 0
+
+    @property
+    def low(self):
+        return 0x100 if self.drive_from <= self._now < self.drive_until else 0
+
+    def _us(self, clks):
+        return clks / self.us
+
+    def _flag(self, msg):
+        self.violations.append("t=%d: %s" % (self._now, msg))
+
+    def step(self, w):
+        now = w.cycle
+        self._now = now
+        ml = 1 if (w.mlow & 0x100) else 0
+        if ml and not self.ml_prev:
+            self._fall(now)
+        elif self.ml_prev and not ml:
+            self._rise(now)
+        self.ml_prev = ml
+        if self.pending_presence is not None and now >= self.pending_presence:
+            self.drive_from, self.drive_until = now, now + self.presence_len * self.us
+            self.pending_presence = None
+
+    def _fall(self, now):
+        if self.t_rise is not None and self._us(now - self.t_rise) < 1.0:
+            self._flag("recovery %.2f us < 1 us" % self._us(now - self.t_rise))
+        if self.last_fall is not None and self.mode != "idle" and self.pending_presence is None \
+                and now > self.drive_until and self._us(now - self.last_fall) < 60 \
+                and not (self.resets and self.resets[-1][0] == self.last_fall):
+            self._flag("slot starts %.1f us after the previous one (< 60 us)" % self._us(now - self.last_fall))
+        self.t_fall = self.last_fall = now
+        if self.mode == "send":                       # a read slot: the device must act NOW
+            bit = self.tx_bits.pop(0) if self.tx_bits else 1
+            self.sent.append(bit)
+            if bit == 0:
+                self.drive_from, self.drive_until = now + 1, now + self.read_hold * self.us
+
+    def _rise(self, now):
+        self.t_rise = now
+        low = now - self.t_fall
+        lus = self._us(low)
+        if lus >= self.reset_min:
+            self.resets.append((self.t_fall, low))
+            self.mode, self.cmd_bits, self.tx_bits = "cmd", [], []
+            self.cmds.append([])
+            if self.present:
+                self.pending_presence = now + self.presence_delay * self.us
+            return
+        bit = None
+        if lus < 1.0:
+            self._flag("low pulse %.2f us < 1 us" % lus)
+        elif 15 < lus < 60 or lus > 120:
+            self._flag("low pulse %.1f us is neither a write-1/read (<=15), a write-0 (60..120) nor a reset" % lus)
+        if self.mode == "cmd":
+            bit = 0 if lus > 30 else 1                # the device samples 30 us after the fall
+            self.cmd_bits.append(bit)
+            if len(self.cmd_bits) == 8:
+                byte = sum(b << i for i, b in enumerate(self.cmd_bits))
+                self.cmds[-1].append(byte)
+                self.cmd_bits = []
+                if byte in self.responses:
+                    self.mode = "send"
+                    self.tx_bits = [(v >> i) & 1 for v in self.responses[byte] for i in range(8)]
+        elif self.mode == "send" and lus > 15:
+            self._flag("read slot low pulse %.1f us > 15 us" % lus)
+        self.slots.append((self.t_fall, low, bit))

@@ -1,0 +1,72 @@
+; 1-Wire master (Maxim/Dallas, standard speed).  Original program.
+;
+; Bus: ONE open-drain line, DQ = PIO pin 8 (= uio[4]) with an external ~4.7 kOhm pull-up.
+;   `set pindirs, 1` pulls DQ LOW (the pad drives the always-0 output value),
+;   `set pindirs, 0` RELEASES it, `in pins, 1` reads it.  No pad inversion is involved.
+;
+; Config: SET_BASE = 8 (1 pin), IN_BASE = 8, autopull OFF, autopush OFF, OUT shift RIGHT, IN shift
+;         RIGHT.  PIN_OWN bit 8.  ONE PIO TICK MUST BE 1 us:  CLKDIV = clock in MHz (24 at 24 MHz).
+;
+; Command word (one FIFO word per command, bit 0 first):
+;     [0]     op       0 = RESET + presence detect,   1 = transfer bits
+;     [5:1]   n-1      op 1: number of bit slots minus one (1..26 bits)
+;     [31:6]  data     op 1: bits to send, LSB first (1-Wire sends the LSB first).
+;                      To READ, send ones: a read slot is a write-1 slot (the device then pulls the
+;                      line low for a 0 and leaves it alone for a 1).
+; Every command pushes ONE word to the RX FIFO:
+;     op 0:   bit 31 = the line level sampled during the presence window: 0 = a device answered.
+;     op 1:   the n bits the master sampled in its slots, first slot in bit (32-n), last in bit 31
+;             (the ISR shifts right), i.e. a byte read is word >> 24 (n = 8), a 16-bit read word >> 16.
+;             During a write-0 slot the sampled bit is the released-line level (1) and is meaningless.
+;
+; Timing, ticks = us, taken from the Maxim app note 126 / OneWire-library values:
+;   write-1 / read slot: low 3, release, SAMPLE at 13 us after the falling edge, slot ends at 70
+;                        (a device must hold a read 0 for >= 15 us from the fall: sampled with margin)
+;   write-0 slot:        low 65, release 5, slot ends at 71 (a device samples the line 15..60 us after the fall)
+;   reset:               low 530 (spec 480..960), release, presence sampled at ~69 us (a presence pulse
+;                        is low across 60..75 us for any compliant device), then 429 us of recovery
+;   Not implemented: overdrive speed, strong pull-up for parasite power, ROM search (a CPU algorithm).
+.program onewire
+
+.wrap_target
+cmd:
+    pull block                  ; command word
+    out x, 1                    ; x = op
+    jmp !x do_reset
+    out y, 5                    ; y = n - 1
+bit:
+    out x, 1                    ; next data bit (LSB first)
+    jmp !x slot0
+slot1:                          ; write-1 / read slot
+    set pindirs, 1 [2]          ; DQ low for 3 us
+    set pindirs, 0 [9]          ; release; 10 us later = 13 us after the fall ...
+    in pins, 1 [31]             ; ... sample the line, then ride out the rest of the slot
+    nop [24]                    ; slot = 3 + 10 + 32 + 25 = 70 us
+next_bit:
+    jmp y-- bit
+    push block                  ; the sampled bits
+    jmp cmd
+slot0:                          ; write-0 slot
+    set pindirs, 1 [31]         ; DQ low 32 + 32 + 1 = 65 us
+    nop [31]
+    nop
+    set pindirs, 0 [4]          ; release, 5 us of recovery
+    in pins, 1                  ; keeps the bit count aligned with slot1
+    jmp next_bit
+
+do_reset:
+    set pindirs, 1              ; DQ low
+    set x, 15
+rlow:
+    nop [31]
+    jmp x-- rlow                ; 16 x 33 = 528 us (+2) low
+    set pindirs, 0 [31]         ; release
+    nop [31]
+    nop [3]                     ; 68 us after the release ...
+    in pins, 1                  ; ... sample presence (low = a device answered)
+    set x, 12
+rrec:
+    nop [31]
+    jmp x-- rrec                ; 13 x 33 = 429 us of reset recovery
+    push block
+.wrap
