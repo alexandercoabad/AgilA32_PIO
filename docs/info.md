@@ -1025,3 +1025,39 @@ about 27x (harmless for the earlier demos, which only needed protocols to finish
 clocks via `delay()` and slept for 4.6 million.
 *Not done:* host-to-device commands (needs CLOCK/DATA open-drain on `uio[5:4]`), real-keyboard
 measurements, scancode-to-ASCII on top of the receiver.
+
+**WS2812 / SK6812 LED strips (`pio/ws2812.pio`).** Four instructions: the classic three-phase structure (`out x,1` on a low side-set, branch on the bit with the
+rising edge, then a long or short high), with the delays chosen so both pulse widths sit near the middle of the datasheet windows. `SIDESET_BASE` is the data pin
+(1 bit, not optional), no OUT pins; shifting is left (MSB first) with autopull at 24 bits (32 for RGBW), no autopush. The pixel word is `GRB << 8`: the 24 bits sent
+are the top 24. The line idles LOW because the side-set also happens while `out` stalls on an empty FIFO, and a low of at least the strip's reset time latches the frame
+(50 us for the classic parts, up to 280 us for newer WS2812B / SK6812 revisions -- from datasheets as I remember them; check yours).
+
+| | ticks | at 24 MHz, CLKDIV 3 (tick 125 ns) | datasheet WS2812B |
+|---|---|---|---|
+| bit period | 10 | 1.25 us | 1.25 us |
+| 0: high / low | 3 / 7 | 375 / 875 ns | 400 / 850 +-150 ns |
+| 1: high / low | 7 / 3 | 875 / 375 ns | 800 / 450 +-150 ns |
+
+Other clocks: `CLKDIV = f_clk / 8 MHz` (3 at 24 MHz, 6 at 48 MHz). `T1`/`T2`/`T3` are `.define`s at the top of the file.
+
+*Feed rate: the limit that matters on this chip.* A pixel is 24 bits x 30 clocks = 720 clocks on the wire, but this CPU queues about one word per ~3000 clocks (flash
+paging). A one-word-at-a-time feeder therefore leaves the line low for far longer than the reset time between pixels, the strip latches after EVERY pixel, and on a chain every
+pixel lands on LED 0 (`test_ws2812_feed_gap_longer_than_reset_splits_the_frame`; the firmware variant `build_pio_ws2812.py --naive` shows a 41,772-clock gap and the testbench
+fails on it). The way around it is the 4-deep TX FIFO: preload four pixels while SM0 is disabled, enable, and queue a fifth right away. That is what the demo does and what was
+measured (5 pixels, longest gap inside the frame 21 clocks, i.e. none). By the same arithmetic a CPU-fed frame can reach perhaps 5-6 pixels; I demonstrated 5. Longer strips would
+need a faster feed than this CPU provides, or a different program (for example one that repeats a single colour N times by itself) -- not built.
+
+*CPU-driven demo (`tools/build_pio_ws2812.py`, `test/tb_pio_cpu_ws2812.v`).* The CPU sets `GPIO_OUT[0]` low (the pad is driven from there, by the boot LED counter, until `PIN_OWN` is
+set), loads the program, hands the pad over, preloads four pixels, enables SM0, queues the fifth and halts. The testbench is a strip: it decodes every bit from the measured pulse
+width and checks the five GRB values, exact 9 / 21-clock high times, exactly 120 pulses and no others, the pad low before and after the hand-over, the line low for 3027 clocks (126 us)
+before the first bit, the longest in-frame gap far below the reset time, the core halted 2771 clocks before the last bit ended, and the line idle low afterwards. Negative images:
+`--naive` (slow feeder) and `--bad-handover` (`GPIO_OUT[0]` high when the pad changes hands) make it fail; run with `vvp ... +img=<name>.hex`. A 126 us lead-in is enough to flush
+whatever the boot counter put on the pad for a 50 us strip but NOT for a 280 us one: add `h.delay(...)` before the first push if yours needs it.
+
+*Tests* (`test/test_pio_protocols.py`, strip model `Ws2812Strip` in `test/pio_tb_lib.py`; the strip decodes bits from pulse widths and treats a low of >= the reset time as the latch): single pixel with
+exact timing and the datasheet windows, 8 pixels back to back with no extra clock at pixel boundaries, two frames each latched, a feed gap longer than the reset time splitting the frame, and 32-bit
+RGBW pixels. Mutation checks: inverting the side-set polarity, a 3-tick `T2`, a 6-tick zero pulse, and a zero pulse that never drops all fail the tests (the 3-tick `T2` passes the two tests that do not
+measure bit periods and fails the other three).
+
+*Not done:* a real strip; level shifting (WS2812 data inputs typically want about 0.7 x VDD, so a 5 V strip usually needs a 3.3 V -> 5 V shifter -- I have not checked your strip); a repeat-colour program for long strips;
+a DMA-like feed; an RGBW top-level demo.

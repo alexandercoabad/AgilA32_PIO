@@ -1,0 +1,33 @@
+; WS2812 / WS2812B / SK6812 ("NeoPixel") LED data line: one 24-bit (or 32-bit RGBW) pixel per TX word,
+; sent MSB first, back to back, on a single side-set pin. Same three-phase structure as the well-known
+; Pico SDK ws2812 example, with the delays re-chosen so that BOTH pulse widths sit near the middle of
+; the datasheet windows at the tick rate below.
+;
+; Timing: 10 PIO ticks per bit. At 24 MHz with CLKDIV 3 the tick is 8 MHz (125 ns): bit = 1.25 us.
+;     bit 0:  high T1 = 3 ticks = 375 ns   low T2 + T3 = 7 ticks = 875 ns   (datasheet 400 / 850 +-150)
+;     bit 1:  high T1 + T2 = 7 ticks = 875 ns   low T3 = 3 ticks = 375 ns   (datasheet 800 / 450 +-150)
+; Other clocks: pick CLKDIV so that tick = 125 ns  (CLKDIV = f_clk / 8 MHz; 6 at 48 MHz, 3 at 24 MHz).
+;
+; Wiring: SIDESET_BASE = the data pin (side-set 1 bit, not optional); no OUT pins are used. The line
+; idles LOW: the side-set also happens while `out` stalls on an empty FIFO, so after the last bit the
+; line stays low, and a gap of at least the strip's reset time (50 us for WS2812, 280 us for newer
+; WS2812B / SK6812) latches the data. Keep the TX FIFO fed WITHOUT a gap that long, or the strip
+; latches in the middle of your frame and every later pixel lands on LED 0.
+;
+; Shift config: SHIFT left (MSB first), autopull at 24 bits (32 for RGBW), no autopush.
+; Pixel word = GRB << 8 (WS2812 wants green first, then red, then blue); the 24 bits sent are the top 24.
+.program ws2812
+.side_set 1
+.define public T1 3
+.define public T2 4
+.define public T3 3
+
+.wrap_target
+bitloop:
+    out x, 1       side 0 [T3 - 1] ; Next bit; the side-set happens even while this stalls on an empty FIFO
+    jmp !x do_zero side 1 [T1 - 1] ; Rising edge, then branch on the bit
+do_one:
+    jmp bitloop    side 1 [T2 - 1] ; 1: keep the line high for the long pulse
+do_zero:
+    nop            side 0 [T2 - 1] ; 0: drop the line, short pulse
+.wrap

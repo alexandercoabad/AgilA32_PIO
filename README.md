@@ -14,10 +14,10 @@ from-scratch RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make` in `test/`): **57 cocotb protocol tests**
-(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 11 PIO Verilog
-testbenches**: 8 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
-`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`) and 3 that
+**Test counts** (all run by `make` in `test/`): **62 cocotb protocol tests**
+(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 12 PIO Verilog
+testbenches**: 9 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
+`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`) and 3 that
 drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 
 | Protocol | Runs on | Status | Verified by |
@@ -39,6 +39,7 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`).
 | SPI LCD (ST7789) | CPU bit-bang (not PIO) | Done | `tb_st7789_driver.v` |
 | SWD, CAN | PIO | Not attempted | -- |
 | Low-speed USB host engine (1.5 Mb/s: token/data TX with NRZI + bit stuffing + EOP, reply RX) | PIO (`usb_ls`, 29 of 32 instruction words, one state machine) | Done in simulation at 24 MHz (CLKDIV 2); receive clock tolerance only about -0.5 % to +0.8 % (see below) | 7 cocotb tests against a low-speed device model (token waveform edge-by-edge, max-stuffing DATA1, IN -> DATA1 turnaround, NAK, receiver alone, 12-packet fuzz, clock-error sweep) + `tb_pio_cpu_usb.v` (CPU queues an IN token and halts; PIO sends it, turns the bus around and captures the 8-byte reply) |
+| WS2812 / SK6812 LED strip ("NeoPixel"), CPU-driven | PIO (`ws2812`, 4 instructions, one state machine) | Done in simulation at 24 MHz (CLKDIV 3); a CPU-fed frame is limited to about 5 pixels (see below); not tried on a real strip | 5 cocotb tests against a strip model that decodes bits from pulse widths (exact 375 / 875 ns pulses and 1.25 us bits, 8 pixels back to back, latch between frames, a feed gap longer than the reset time splits the frame, 32-bit RGBW) and `tb_pio_cpu_ws2812.v` (CPU preloads four pixels, enables SM0, queues a fifth and halts; no pulse at the pad hand-over, 126 us low before the first bit, PIO finishes alone) |
 | 10BASE-T (brief's stretch goal) | PIO | Not attempted: needs a frame buffer (a 4-deep FIFO holds 128 of ~576 bits; the CPU manages one word per ~3000 clocks), at least 40 MHz, and external magnetics | -- |
 
 All results above are from simulation (RTL and gate-level). Nothing has been
@@ -149,7 +150,7 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 57 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 62 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
@@ -327,8 +328,8 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       (`test/tb_timer_pwm.v`, `test/tb_ebreak_halt.v`,
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all wired into CI, all gating the
-      build, all 11 cocotb tests + all 26 standalone tests (15 CPU and
-      peripheral, 11 PIO) + the 53 PIO protocol cocotb tests currently
+      build, all 11 cocotb tests + all 27 standalone tests (15 CPU and
+      peripheral, 12 PIO) + the 62 PIO protocol cocotb tests currently
       passing
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
@@ -366,6 +367,7 @@ src/
 pio/
   uart_tx.pio, uart_rx.pio, spi_master.pio, spi_cpha1.pio, spi_cpol1_cpha0.pio, spi_cpol1_cpha1.pio, i2c.pio   Pico SDK programs (i2c: side-set polarity swapped)
   ps2_rx.pio              PS/2 receiver (own program: 11-bit frames, idle-gap resync)
+  ws2812.pio              WS2812 / SK6812 LED data line (4 instructions, side-set pin, idle low)
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you

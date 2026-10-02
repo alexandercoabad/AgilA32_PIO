@@ -21,7 +21,7 @@ from pio_i2c_slave import (I2cSlaveRx, I2cSlaveTx, PIN_OWN_MASK as SL_OWN, INIT_
 from pio_i2c_mm import (I2cMM, SM_CONFIG as MM_CONFIG, PIN_OWN_MASK as MM_OWN, IRQ_LOST, IRQ_NAK,
                         shift_ctrl as mm_shift, MOV_ISR_NULL as MM_MOV_ISR_NULL)
 from pio_tb_lib import (PioBus, World, Wire, SerialSource, SpiSlave, I2cSlave, decode_uart,
-                        Ps2Keyboard, decode_ps2_word,
+                        Ps2Keyboard, decode_ps2_word, Ws2812Strip,
                         assemble, sm_reg, R_CTRL, R_IRQ, R_FSTAT, R_PIN_OWN, R_SYNC_BYP,
                         R_PINS_IN, R_INFO, R_IMEM, SM_ADDR, SM_INSTR, SM_TXF, SM_EXEC,
                         SM_SHIFT, SM_CLKDIV, SM_PINCTRL, shiftctrl, FIFO_DEPTH)
@@ -33,8 +33,8 @@ def load_src(name, origin=0):
     return assemble(open(PIO_DIR + name).read(), origin=origin)
 
 
-async def setup(dut):
-    cocotb.start_soon(Clock(dut.clk, 20, unit="ns").start())      # 50 MHz nominal
+async def setup(dut, period_ns=20):
+    cocotb.start_soon(Clock(dut.clk, period_ns, unit="ns").start())      # 50 MHz nominal unless told
     dut.rst_n.value = 0
     dut.valid.value = 0
     dut.we.value = 0
@@ -1413,3 +1413,140 @@ async def test_mm_host_bus_free_wait_protects_the_other_master_late(dut):
     assert m2.acks == [0, 0, 0, 0] and not m2.lost, (m2.acks, m2.lost)
     assert slave.rx == MM_BUSY_BYTES + [("A", 0xA0), ("D", 0x33)], slave.rx
     assert (slave.starts, slave.stops) == (2, 2) and not slave.violations, slave.violations
+
+
+# ============================================================================= WS2812 / NeoPixel
+# `ws2812.pio`: side-set pin 0 is the data line, 10 PIO ticks per bit, tick = 125 ns = CLKDIV 3 at the
+# 24 MHz this chip is constrained to (period 41.667 ns).  Datasheet windows (WS2812B): T0H 400, T0L 850,
+# T1H 800, T1L 450 ns, each +-150 ns; bit period 1250 ns.
+WS_CLK_NS = 41.666                # 24 MHz (41.667 ns is odd in ps; the simulator wants an even period)
+WS_TICK_CLK = 3                      # CLKDIV
+WS_BIT_CLK = 10 * WS_TICK_CLK        # 30 clocks = 1.25 us
+
+
+async def ws_setup(dut, pull_thresh=24, reset_us=50.0):
+    bus, world = await setup(dut, period_ns=WS_CLK_NS)
+    prog = load_src("ws2812.pio")
+    await bus.load_program(prog)
+    await bus.sm_setup(0, prog, side_base=0, autopull=True, pull_thresh=pull_thresh,
+                       out_right=False, div=(WS_TICK_CLK, 0))
+    strip = Ws2812Strip(pin=0, clk_ns=WS_CLK_NS, reset_us=reset_us)
+    world.devs.append(strip)
+    await bus.write(R_PIN_OWN, 0b001)
+    return bus, world, strip
+
+
+def grb(g, r, b):
+    return ((g << 16) | (r << 8) | b) << 8       # the 24 bits sent are the TOP 24 of the TX word
+
+
+async def ws_feed(dut, bus, words, timeout=400000):
+    """Push `words` as TX room appears (the CPU-in-a-hurry case: no gap between pixels)."""
+    sent = 0
+    for _ in range(timeout):
+        if sent == len(words):
+            return
+        if await bus.tx_level(0) < FIFO_DEPTH:
+            await bus.tx_put(0, words[sent])
+            sent += 1
+    raise AssertionError("feed timed out")
+
+
+def ws_check_windows(strip, tol_ns=150.0):
+    """Every pulse of every bit inside the WS2812B datasheet windows, and all bit periods exact."""
+    typ = {0: (400.0, 850.0), 1: (800.0, 450.0)}
+    bits = [b for fr in strip.frames for b in fr] + strip.cur
+    assert len(bits) == len(strip.high_clk)
+    for i, (b, hi, lo) in enumerate(zip(bits, strip.high_clk, strip.low_clk)):
+        th, tl = typ[b]
+        assert abs(hi * strip.clk_ns - th) <= tol_ns, (i, b, "T%dH = %.0f ns" % (b, hi * strip.clk_ns))
+        last_of_frame = i + 1 == len(bits) or strip.frame_of_bit[i + 1] != strip.frame_of_bit[i]
+        if not last_of_frame:                       # the last low of a frame runs into the reset gap
+            assert abs(lo * strip.clk_ns - tl) <= tol_ns, (i, b, "T%dL = %.0f ns" % (b, lo * strip.clk_ns))
+    assert strip.glitches == 0
+
+
+@cocotb.test()
+async def test_ws2812_single_pixel_exact_timing(dut):
+    """One GRB pixel: data decoded from the pulse widths is right, every bit is exactly 10 ticks
+    (30 clocks), and 0 / 1 pulses are 3 / 7 ticks high (9 / 21 clocks) -- inside the datasheet
+    windows with room to spare on both sides."""
+    bus, world, strip = await ws_setup(dut)
+    pixel = (0xC3, 0x5A, 0x96)                       # G R B: both bit values, runs and alternations
+    await bus.tx_put(0, grb(*pixel))
+    await bus.set_enable(0)
+    await ClockCycles(dut.clk, 24 * WS_BIT_CLK + 2500)
+    assert len(strip.frames) == 1 and not strip.cur, "frame must be latched after the idle gap"
+    assert Ws2812Strip.pixels(strip.frames[0]) == [(0xC3 << 16) | (0x5A << 8) | 0x96]
+    assert strip.period_clk == [WS_BIT_CLK] * 23, set(strip.period_clk)
+    assert {strip.high_clk[i] for i, b in enumerate(strip.frames[0]) if b == 0} == {3 * WS_TICK_CLK}
+    assert {strip.high_clk[i] for i, b in enumerate(strip.frames[0]) if b == 1} == {7 * WS_TICK_CLK}
+    ws_check_windows(strip)
+    assert strip.level == 0, "the line must idle LOW after the last bit"
+
+
+@cocotb.test()
+async def test_ws2812_eight_pixels_back_to_back(dut):
+    """8 pixels streamed as TX room appears: ONE frame of 192 bits with no extra clock anywhere, not even
+    at the pixel boundaries (autopull refills the OSR inside the bit loop), then one latch."""
+    bus, world, strip = await ws_setup(dut)
+    rnd = random.Random(2812)
+    pixels = [(rnd.randrange(256), rnd.randrange(256), rnd.randrange(256)) for _ in range(8)]
+    await bus.set_enable(0)
+    await ws_feed(dut, bus, [grb(*p) for p in pixels])
+    await ClockCycles(dut.clk, 8 * 24 * WS_BIT_CLK + 2500)
+    assert len(strip.frames) == 1, "a gap inside the frame split it into %d frames" % len(strip.frames)
+    want = [(g << 16) | (r << 8) | b for g, r, b in pixels]
+    assert Ws2812Strip.pixels(strip.frames[0]) == want
+    assert strip.period_clk == [WS_BIT_CLK] * (8 * 24 - 1), set(strip.period_clk)
+    ws_check_windows(strip)
+
+
+@cocotb.test()
+async def test_ws2812_two_frames_each_latched(dut):
+    """Frame A (3 pixels), > reset time of silence, frame B (2 pixels): both latched, in order, and the
+    line is low in between and afterwards."""
+    bus, world, strip = await ws_setup(dut)
+    a = [(1, 2, 3), (0xFF, 0, 0x80), (0x10, 0x20, 0x30)]
+    b = [(0xAA, 0x55, 0xAA), (0, 0, 0)]
+    await bus.set_enable(0)
+    await ws_feed(dut, bus, [grb(*p) for p in a])
+    await ClockCycles(dut.clk, 3 * 24 * WS_BIT_CLK + 2500)           # idle 2500 clocks = 104 us > 50 us
+    assert len(strip.frames) == 1
+    await ws_feed(dut, bus, [grb(*p) for p in b])
+    await ClockCycles(dut.clk, 2 * 24 * WS_BIT_CLK + 2500)
+    px = lambda frame: Ws2812Strip.pixels(frame)
+    conv = lambda ps: [(g << 16) | (r << 8) | bb for g, r, bb in ps]
+    assert len(strip.frames) == 2 and not strip.cur
+    assert px(strip.frames[0]) == conv(a) and px(strip.frames[1]) == conv(b)
+    assert strip.level == 0
+
+
+@cocotb.test()
+async def test_ws2812_feed_gap_longer_than_reset_splits_the_frame(dut):
+    """The hazard this chip's CPU has to respect, caught by the model: if the feeder leaves the TX FIFO
+    empty for longer than the strip's reset time between two pixels, the strip latches after the FIRST pixel
+    and the second pixel starts a new frame -- on a real chain it would land on LED 0 again."""
+    bus, world, strip = await ws_setup(dut)
+    await bus.set_enable(0)
+    await bus.tx_put(0, grb(0x12, 0x34, 0x56))
+    await ClockCycles(dut.clk, 24 * WS_BIT_CLK + 2500)               # 104 us of silence > 50 us reset
+    await bus.tx_put(0, grb(0x78, 0x9A, 0xBC))
+    await ClockCycles(dut.clk, 24 * WS_BIT_CLK + 2500)
+    assert len(strip.frames) == 2, "expected two separate frames, got %d" % len(strip.frames)
+    assert [Ws2812Strip.pixels(f)[0] for f in strip.frames] == [0x123456, 0x789ABC]
+    # ... and a longer-reset strip (280 us) would NOT have split it:
+    assert 2500 * WS_CLK_NS / 1000.0 < 280.0
+
+
+@cocotb.test()
+async def test_ws2812_rgbw_32_bit_pixels(dut):
+    """SK6812 RGBW: autopull threshold 32 makes the same program send 32-bit pixels."""
+    bus, world, strip = await ws_setup(dut, pull_thresh=32)
+    words = [0x11223344, 0xFF00FF00, 0x80000001]
+    await bus.set_enable(0)
+    await ws_feed(dut, bus, words)
+    await ClockCycles(dut.clk, 3 * 32 * WS_BIT_CLK + 2500)
+    assert len(strip.frames) == 1
+    assert Ws2812Strip.pixels(strip.frames[0], nbits=32) == words
+    assert strip.period_clk == [WS_BIT_CLK] * (3 * 32 - 1)

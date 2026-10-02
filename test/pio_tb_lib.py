@@ -260,6 +260,58 @@ class Ps2Keyboard:
         w.ext_in = (w.ext_in & ~mask) | (clk << self.clk_pin) | (data << self.data_pin)
 
 
+class Ws2812Strip:
+    """WS2812 / SK6812 receiver watching one pin (the PIO's side-set pin).  Like the real chip it
+    decodes each bit from the width of its HIGH pulse (>= `thresh_ns` is a 1) and treats a LOW of at
+    least `reset_us` as the latch (end of frame).  It records every pulse in clocks so tests can check
+    the datasheet windows, and every frame as a list of bits.
+        high_clk[i], low_clk[i]   high width of bit i / low time AFTER bit i (to the next rising edge;
+                                  for the last bit of a frame: until the latch, measured at the latch)
+        frames                    list of closed frames (each a list of 0/1 bits)
+        cur                       bits of the frame still open (not yet latched)"""
+
+    def __init__(self, pin=0, clk_ns=41.667, reset_us=50.0, thresh_ns=600.0):
+        self.pin, self.clk_ns = pin, clk_ns
+        self.reset_clk = int(reset_us * 1000.0 / clk_ns)
+        self.thresh_clk = thresh_ns / clk_ns
+        self.level = 0
+        self.rise = None            # cycle of the last rising edge
+        self.fall = None            # cycle of the last falling edge
+        self.high_clk, self.low_clk, self.period_clk = [], [], []
+        self.frame_of_bit = []      # frame index each recorded bit belongs to
+        self.frames, self.cur = [], []
+        self.glitches = 0           # pulses shorter than 2 clocks
+
+    def step(self, w):
+        lvl = (w.pin_out >> self.pin) & 1
+        if lvl and not self.level:                           # rising edge
+            if self.fall is not None and self.low_clk and self.cur:
+                self.low_clk[-1] = w.cycle - self.fall       # low time after the previous bit
+            if self.rise is not None and self.cur:
+                self.period_clk.append(w.cycle - self.rise)
+            self.rise = w.cycle
+        elif self.level and not lvl:                         # falling edge: one bit complete
+            width = w.cycle - self.rise
+            if width < 2:
+                self.glitches += 1
+            self.high_clk.append(width)
+            self.low_clk.append(0)
+            self.cur.append(1 if width >= self.thresh_clk else 0)
+            self.frame_of_bit.append(len(self.frames))
+            self.fall = w.cycle
+        elif not lvl and self.fall is not None and self.cur and w.cycle - self.fall >= self.reset_clk:
+            self.low_clk[-1] = w.cycle - self.fall           # long idle: latch
+            self.frames.append(self.cur)
+            self.cur = []
+        self.level = lvl
+
+    @staticmethod
+    def pixels(bits, nbits=24):
+        """Split a frame's bits into pixel words, MSB first."""
+        assert len(bits) % nbits == 0, "frame of %d bits is not a whole number of %d-bit pixels" % (len(bits), nbits)
+        return [int("".join(map(str, bits[i:i + nbits])), 2) for i in range(0, len(bits), nbits)]
+
+
 def decode_ps2_word(word):
     """`pio/ps2_rx.pio` autopushes 11 bits shifted right, so the frame sits in bits [31:21]:
     start[0] data[8:1] parity[9] stop[10] of (word >> 21).  Returns (data, frame_ok) where
