@@ -428,6 +428,12 @@ gets bootloaded into it), edit `tools/build_boot_rom.py` and re-run it
 to regenerate `src/boot_rom_body.vh`, which `src/mem.v` `` `include``s
 directly -- don't hand-edit that file.
 
+*PIO block tests, CI and mutation sweeps.* Besides the suites below, the PIO block has 76 cocotb protocol tests, 16 PIO Verilog testbenches
+(12 of them CPU-driven end to end through the real top level) and four mutation sweeps (`tools/i2c_slave_mutation_sweep.py`,
+`onewire_mutation_sweep.py`, `vga_mutation_sweep.py`, `ws2812_repeat_mutation_sweep.py`; 29 + 23 + 23 + 18 one-line mutants, all caught). `make standalone-tests` runs
+everything; `.github/workflows/pio-tests.yaml` does so on every push (written and run locally, not yet run on GitHub), while `test.yaml` runs only `make`.
+Everything above is simulation; none of the PIO protocols has been tried on real hardware or a real peer device.
+
 Nine test suites cover different parts of this design (see `test/`):
 `test.py` (cocotb) drives the real top-level module end-to-end --
 self-test pass/fail with and without a simulated QSPI slave, the demo
@@ -510,6 +516,12 @@ longer reflects the demo counter or self-test result. A PS/2 keyboard
 can be wired to `ui_in[3]` (CLOCK) and `ui_in[4]` (DATA) for the
 reader described above -- both idle high, both driven by the
 keyboard, nothing else on the chip needs to change.
+
+PIO pin use (pins 0-7 = `uo_out[0:7]`, pins 8-9 = `uio[4]`/`uio[5]`; a pad belongs to the PIO only once its `PIN_OWN` bit is set): the Tiny VGA
+Pmod goes on `uo_out[7:0]` (R1 G1 B1 VSYNC R0 G0 B0 HSYNC; the PIO drives only the high colour bit of each channel, and the Pmod
+wants 3.3 V), a WS2812 / SK6812 data line on `uo_out[0]` (a 5 V strip usually needs a level shifter), and I2C, 1-Wire and low-speed USB use pads 8/9
+(`uio[4:5]`, which the QSPI Pmod also uses as SD2/SD3: whether a PIO device and the Pmod can share those pins has not been checked). Each protocol's
+section below gives its exact wiring.
 
 `uio[0:7]` are wired to the
 [Tiny Tapeout QSPI Pmod](https://github.com/mole99/qspi-pmod) pinout:
@@ -753,8 +765,9 @@ SCK period, SYNC_BYP behaviour), and `tb_pio_cpu_uart.v` (end-to-end:
 real CPU + flash image + PIO in the real top level, CPU halted while the
 last byte is still on the wire).
 
-**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** 26 cocotb
-tests drive `pio.v` over the same bus the CPU uses, against cycle-accurate peer models
+**Protocol tests (`test/test_pio_protocols.py`, `make -f Makefile.proto`).** The suite started with 26 cocotb
+tests and has 76 now (I2C slave and multi-master, JTAG, low-speed USB, WS2812 including the repeat-colour program, and 1-Wire were added
+later; each is described in its own section below). They drive `pio.v` over the same bus the CPU uses, against cycle-accurate peer models
 (`test/pio_tb_lib.py`): register/FIFO behaviour; UART TX at integer, fractional and
 averaged dividers, UART RX incl. framing error and baud tolerance, two-SM UART loopback;
 SPI master modes 0-3 (plus fast SCK with `SYNC_BYP`; MOSI setup/hold measured); and I2C write, read,
@@ -1069,7 +1082,7 @@ measure bit periods and fails the other three).
 
 *Not done:* a real strip; level shifting (WS2812 data inputs typically want about 0.7 x VDD, so a 5 V strip usually needs a 3.3 V -> 5 V shifter -- I have not checked your strip); a DMA-like feed. (The repeat-colour program, the RGBW top-level demo and the 280 us-reset firmware were added in feature 17, below.)
 
-*Feature 17 additions (`CHANGES_feature17.md`).* `pio/ws2812_repeat.pio` (15 words): a command is two TX words, `N - 1` and the pixel, and paints N identical pixels without any CPU feed (the test streams 300 pixels from one pair of words with the FIFO empty). The HIGH pulses are exactly those of `ws2812.pio`; the instructions that reload the pixel lengthen the LOW time to 4 / 8 ticks between pixels and 9 / 12 ticks between commands (after a 1 / after a 0, 125 ns ticks), outside the nominal T0L / T1L windows and untried on a real strip. `tools/build_pio_ws2812.py --rgbw` and `--reset-us 280` build the top-level firmware variants (32-bit pixels; a CPU busy-wait after `PIN_OWN` that keeps the line low 343 us for 280 us parts); `tb_pio_cpu_ws2812.v` takes `+bits=32` / `+reset_us=N` / `+img=`, and the 126 us default firmware fails the 280 us check as it should. `tools/ws2812_repeat_mutation_sweep.py`: 18 mutants, all caught.
+*Feature 17 additions (`CHANGES_feature17.md`).* `pio/ws2812_repeat.pio` (15 words): a command is two TX words, `N - 1` and the pixel, and paints N identical pixels without any CPU feed (the test streams 300 pixels from one pair of words with the FIFO empty). The HIGH pulses are exactly those of `ws2812.pio`; the instructions that reload the pixel lengthen the LOW time to 4 / 8 ticks between pixels and 9 / 12 ticks between commands (after a 1 / after a 0, 125 ns ticks), outside the nominal T0L / T1L windows and untried on a real strip. `tools/build_pio_ws2812.py --rgbw` and `--reset-us 280` build the top-level firmware variants (32-bit pixels; a CPU busy-wait after `PIN_OWN` that keeps the line low 343 us for 280 us parts); `tb_pio_cpu_ws2812.v` takes `+bits=32` / `+reset_us=N` / `+img=`, and the 126 us default firmware fails the 280 us check as it should. `tb_pio_cpu_ws2812_repeat.v` runs it through the real top level: the CPU queues three runs (30 green, 20 red, 10 blue) with six FIFO words, halts, and the PIO sends the 60 pixels alone with every pulse as documented. `tools/ws2812_repeat_mutation_sweep.py`: 18 mutants, all caught.
 
 **1-Wire master (`pio/onewire.pio`).** One open-drain line (DQ = PIO pin 8 = uio[4], external pull-up about 4.7 kOhm). `set pindirs, 1` pulls DQ low, `set pindirs, 0` releases it, `in pins, 1` reads it. Standard speed, 1 us tick (CLKDIV 24 at 24 MHz). 31 of 32 instruction words.
 

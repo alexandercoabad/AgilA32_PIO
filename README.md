@@ -14,10 +14,10 @@ from-scratch RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make` in `test/`): **71 cocotb protocol tests**
-(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 15 PIO Verilog
-testbenches**: 11 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
-`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`, `tb_pio_cpu_onewire.v`, `tb_pio_cpu_vga.v`) and 4 that
+**Test counts** (all run by `make standalone-tests` in `test/`, and on every push by `.github/workflows/pio-tests.yaml`): **76 cocotb protocol tests**
+(`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 16 PIO Verilog
+testbenches**: 12 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
+`tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`, `tb_pio_cpu_ws2812_repeat.v`, `tb_pio_cpu_onewire.v`, `tb_pio_cpu_vga.v`) and 4 that
 drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio_vga.v`).
 
 | Protocol | Runs on | Status | Verified by |
@@ -40,7 +40,7 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio
 | SWD, CAN | PIO | Not attempted | -- |
 | Low-speed USB host engine (1.5 Mb/s: token/data TX with NRZI + bit stuffing + EOP, reply RX) | PIO (`usb_ls`, 29 of 32 instruction words, one state machine) | Done in simulation at 24 MHz (CLKDIV 2); receive clock tolerance only about -0.5 % to +0.8 % (see below) | 7 cocotb tests against a low-speed device model (token waveform edge-by-edge, max-stuffing DATA1, IN -> DATA1 turnaround, NAK, receiver alone, 12-packet fuzz, clock-error sweep) + `tb_pio_cpu_usb.v` (CPU queues an IN token and halts; PIO sends it, turns the bus around and captures the 8-byte reply) |
 | WS2812 / SK6812 LED strip ("NeoPixel"), CPU-driven | PIO (`ws2812`, 4 instructions, one state machine) | Done in simulation at 24 MHz (CLKDIV 3); a CPU-fed frame is limited to about 5 pixels (see below); not tried on a real strip | 5 cocotb tests against a strip model that decodes bits from pulse widths (exact 375 / 875 ns pulses and 1.25 us bits, 8 pixels back to back, latch between frames, a feed gap longer than the reset time splits the frame, 32-bit RGBW) and `tb_pio_cpu_ws2812.v` (CPU preloads four pixels, enables SM0, queues a fifth and halts; no pulse at the pad hand-over, 126 us low before the first bit, PIO finishes alone); the same bench also runs an RGBW firmware (32-bit pixels) and a 280 us-reset firmware (343 us low before the first bit) |
-| WS2812 long strip (repeat colour) | PIO (`ws2812_repeat`, 15 instructions, one state machine) | Done in simulation: 300 pixels from ONE pair of FIFO words; borders stretch the LOW time to 1.0-1.5 us (outside the nominal windows, not tried on a strip) | 5 cocotb tests with exact HIGH and LOW widths at every border (runs, back-to-back runs, N = 1, RGBW, latch) + `tools/ws2812_repeat_mutation_sweep.py` (18 mutants, all caught) |
+| WS2812 long strip (repeat colour) | PIO (`ws2812_repeat`, 15 instructions, one state machine) | Done in simulation: 300 pixels from ONE pair of FIFO words; borders stretch the LOW time to 1.0-1.5 us (outside the nominal windows, not tried on a strip) | 5 cocotb tests with exact HIGH and LOW widths at every border (runs, back-to-back runs, N = 1, RGBW, latch) + `tb_pio_cpu_ws2812_repeat.v` (CPU queues three colour runs with six FIFO words and halts; the PIO sends 60 pixels alone, every pulse exact) + `tools/ws2812_repeat_mutation_sweep.py` (18 mutants, all caught) |
 | 1-Wire master (Maxim/Dallas, standard speed): reset + presence, bit slots, READ ROM | PIO (`onewire`, 31 of 32 instruction words, one state machine, open-drain DQ on pad 8) | Done in simulation at 24 MHz (CLKDIV 24 = 1 us tick); no overdrive speed, no strong pull-up, ROM search would be CPU code; usable clock window about -7.7 % to +15 % | 7 cocotb tests against a 1-Wire device model that checks every pulse (reset 480-960 us, presence timing for four device timings, absent device, write-slot edges, READ ROM with CRC-8, partial bit counts, read-0 hold margin, clock-tolerance sweep) and `tb_pio_cpu_onewire.v` (CPU resets the bus, sends READ ROM, reads and shows the 8 ROM bytes; CRC-8 checked) |
 | VGA 640x480 colour bars (Tiny VGA Pmod, uo_out) | PIO (`vga_frame` 23 words + `vga_line` 9 words = all 32, two state machines, CLKDIV 1) | Done in simulation at the pixel clock (one tick = one pixel); 8 colours at about 2/3 brightness (the LSB colour pins are not driven); 25.175 MHz gives exactly 59.94 Hz, this chip's 24 MHz gives 57.1 Hz (not tried on a real monitor) | `tb_pio_vga.v` (VGA monitor model: HSYNC 800 / 96 on every line, VSYNC 2 lines, 525 lines, 420000-clock frames, 480 picture lines of 8 exact 80-clock bars, black blanking, palette change applies next frame) and `tb_pio_cpu_vga.v` (CPU starts both machines with one write and halts; PIO draws 3 frames alone) |
 | 10BASE-T (brief's stretch goal) | PIO | Not attempted: needs a frame buffer (a 4-deep FIFO holds 128 of ~576 bits; the CPU manages one word per ~3000 clocks), at least 40 MHz, and external magnetics | -- |
@@ -153,7 +153,7 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 71 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 76 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
@@ -318,8 +318,8 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       ASIC competition (6x4 tiles).
 - [x] Test suites (see "Testing locally" below): on-chip
       cocotb regression (self-test, demo counter, full bootload-and-run),
-      71 cocotb PIO protocol tests, and 30 standalone Icarus testbenches
-      (15 CPU and peripheral, listed next, plus the 15 PIO ones from the
+      76 cocotb PIO protocol tests, and 31 standalone Icarus testbenches
+      (15 CPU and peripheral, listed next, plus the 16 PIO ones from the
       protocol table above) -- QSPI engine
       bit-level protocol, external-window integration via direct bus
       driving, full CPU-driven external load/store, self-test/bootload,
@@ -332,10 +332,10 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       variable SPI clock divider, and the generic SPI peripheral
       (`test/tb_timer_pwm.v`, `test/tb_ebreak_halt.v`,
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
-      `test/tb_spi_periph.v`) -- all in `make standalone-tests` (not yet in the CI workflow, which runs `make`
-      only); all 11 on-chip cocotb tests + all 30 standalone tests (15 CPU and
-      peripheral, 15 PIO) + the 71 PIO protocol cocotb tests currently
-      passing
+      `test/tb_spi_periph.v`) -- all in `make standalone-tests` (run in CI by `.github/workflows/pio-tests.yaml`;
+      `test.yaml` itself runs `make` only); all 11 on-chip cocotb tests + all 31 standalone tests (15 CPU and
+      peripheral, 16 PIO) + the 76 PIO protocol cocotb tests currently
+      passing in simulation (the new workflow has not run on GitHub yet)
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
       screen. The first plan -- interleave the polled PS/2 reader and the
@@ -394,7 +394,7 @@ tools/
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
   pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py, build_pio_spi4.py, build_pio_jtag.py, build_pio_onewire.py, build_pio_vga.py   PIO assembler/disassembler, flash-image host library, UART demo
-  build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
+  build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_ws2812_repeat.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
   pio_i2c.py, pio_i2c_mm.py, pio_i2c_slave.py, pio_usb.py   host-side helpers / transaction models used by the cocotb tests
   i2c_slave_mutation_sweep.py   breaks the I2C slave programs one line at a time and checks the tests catch each mutant
   onewire_mutation_sweep.py     same for the 1-Wire master program (23 mutants)
@@ -448,7 +448,7 @@ make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, ex
                          # self-test/bootload, FLASH_MODE handoff, FLASH_PAGE bank-switching, ST7789 driver,
                          # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO
                          # testbenches (pio.v level and CPU-driven, incl. 1-Wire and VGA), and at the
-                         # end the 71 cocotb PIO protocol tests (Makefile.proto)
+                         # end the 76 cocotb PIO protocol tests (Makefile.proto)
 make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom   # one protocol test (the longest,
                          # test_onewire_clock_tolerance, takes about 80 s)
 ```
@@ -456,9 +456,16 @@ make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom   # one protocol
 The PIO testbenches need Icarus Verilog (`apt-get install iverilog`); the cocotb ones need
 `pip install -r requirements.txt`.
 
-`.github/workflows/test.yaml` currently runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests`
-(the 30 Icarus testbenches and the 71 protocol tests, about 8 minutes) is run by hand; adding it as a second step of that
-workflow would put it under CI, but that has not been done.
+`.github/workflows/test.yaml` runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests` (the 31 Icarus
+testbenches and the 76 protocol tests; not timed end to end, expect tens of minutes) has its own workflow,
+`.github/workflows/pio-tests.yaml`, which runs on every push and fails on any `FAIL` log or `<failure` in `results.xml`; started by hand with
+`mutation_sweeps` ticked it also runs the four mutation sweeps. That workflow has been written and its steps run locally, but it has
+not run on GitHub yet.
+
+Mutation sweeps (each breaks a PIO program one line at a time on a temporary copy and checks that a test fails; `--list`
+shows the mutants): `tools/i2c_slave_mutation_sweep.py` (29), `tools/onewire_mutation_sweep.py` (23), `tools/vga_mutation_sweep.py` (23),
+`tools/ws2812_repeat_mutation_sweep.py` (18). All mutants are caught; the first runs of the 1-Wire and VGA sweeps each exposed a hole in the
+tests, now closed (see `CHANGES_feature15.md`, `CHANGES_feature16.md`).
 
 ## External memory over QSPI
 
