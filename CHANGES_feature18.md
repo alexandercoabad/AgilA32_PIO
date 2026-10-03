@@ -20,7 +20,14 @@ IRQ flags, clock divider (CLKDIV 1 and 2), pin muxing (`PIN_OWN`), bus handshake
 ## Gate-level notes
 - `test/Makefile`: `COCOTB_TEST_MODULES = test,test_pio_gl`, so the existing `gl_test` job picks it up with no workflow change.
 - In GL the QSPI runs at the slow default (`speed_up_qspi` is a no-op), so the test waits generously (15000 clocks before the
-  bootloader, then polls up to 20 M clocks). Expect the gate-level run to be much slower than the RTL one.
+  bootloader, then polls up to 20 M clocks). The gate-level run is much slower than the RTL one (see "Result" below).
+
+## Result (real gate-level run)
+The test has run in the Tiny Tapeout `gl_test` job on the real IHP post-layout netlist (PDK cells): **12/12 cocotb tests
+passing** (the 11 existing ones plus `test_pio_postlayout_echo_and_pulses`), 0 failures, **2,587 s** simulation time
+(`results.xml` of that run).
+- CI time: this single test makes `gl_test` take about 50 minutes instead of about 6. That is still well inside GitHub's
+  default limit for a hosted job (360 minutes), so no workflow change or `timeout-minutes` is needed.
 
 ## Mutation check
 `tools/gl_smoke_mutation_sweep.py`: 16 one-line breaks of the two programs and of `src/pio_sm.v` (no invert, no bit-reverse,
@@ -28,5 +35,7 @@ no push, no IRQ, wrong IRQ number, 3 pulses, wrong widths, pad left high, no wai
 `wait` not clearing the flag, `irq set` doing nothing). Result: **all 16 caught**, each within seconds (the test's polling budget can be lowered with `GL_SMOKE_MAX_CLOCKS`, default 20 M clocks; the sweep uses 150 k, the RTL run needs about 32 k).
 
 ## Limits
-Verified here on RTL and on a Yosys-flattened generic-gate netlist (not the real IHP post-layout netlist with PDK cells,
-which is not available outside the CI). The first real GL run is the one in your GitHub Actions.
+Developed and mutation-checked here on RTL and on a Yosys-flattened generic-gate netlist (the real IHP post-layout netlist
+with PDK cells is not available outside the CI). The first real gate-level run, in GitHub Actions, passed 12/12 in 2,587 s
+(see "Result"). Not covered: the other PIO tests (protocol decoders, I2C slave, 1-Wire, VGA, WS2812 ...) have still only been
+simulated on RTL; only this smoke test runs on the post-layout netlist.

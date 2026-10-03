@@ -177,7 +177,7 @@ unchanged.
   building it, three WAIT encodings in the supplied testbench turned out to
   have the wrong source field; they are fixed and documented in
   `CHANGES_feature6.md`.
-- Gate-level tests run on the hardened netlist in CI (11/11 passing).
+- Gate-level tests run on the hardened netlist in CI (12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job).
 
 **7. Designed for the synthesis flow, not just for simulation.** The first
 CI synthesis of the PIO block stalled in Yosys' SAT-based `share` pass on the
@@ -307,7 +307,9 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
 - [x] **Hardened on the IHP CMOS5L flow (current target)** at 6x4 tiles with
       the PIO block: 51.45% routing utilization, 34,053 cells (excluding
       fill/tap), clean lint, precheck 10/10 and gate-level tests 11/11
-      (CI run #11, ~2h28m for the `gds` job -- expect a long build)
+      (CI run #11, ~2h28m for the `gds` job -- expect a long build);
+      with the feature 18 PIO smoke test added, gate-level tests 12/12
+      (2,587 s, `gl_test` about 50 min instead of about 6)
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,

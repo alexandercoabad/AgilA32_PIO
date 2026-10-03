@@ -904,8 +904,9 @@ worst hold slack +0.116 ns (fast corner), no hold violations; 0 Magic DRC, 0 rou
 0 antenna-violating nets. Synthesis, placement and routing came out identical to the 1 MHz run (same 36,601
 cells, same 3,605 hold buffers, same wirelength) because nothing needed repair at the tighter period. Unchanged
 design-rule advisories, not failures: 44 max-slew violations (slow corner only), 258 max-fanout and 1 max-cap
-violations. The gate-level tests (11/11) run the CPU and boot path only; no PIO behaviour has been simulated on the
-post-layout netlist.
+violations. The gate-level tests (12/12, 2,587 s) run the CPU and boot path plus one PIO smoke test
+(`test_pio_postlayout_echo_and_pulses`: FIFOs, shifter, ISA decode, IRQ flags, clock divider, pin muxing through the pads,
+see feature 18); the other PIO protocol programs and tests have only been simulated on RTL.
 
 *TX* (`tx_start`): FIFO word 0 = number of bits - 1, then the packet's bits LSB first, 32 per word.
 The bits are the **logical, already bit-stuffed** bits including SYNC (`tools/pio_usb.py` builds
@@ -974,7 +975,7 @@ CLKDIV 1 an SCL period of 16 or 24 clocks is too fast (the master sees no ACK at
 is the first that works; use 40 or more. *No combined slave:* a real sensor or EEPROM (write the
 register pointer, repeated START, read) needs both directions in one device, but the two programs use
 29 + 32 words of a 32-word instruction memory shared by all state machines, so they can only be
-swapped at run time, not run together. *Not done:* a gate-level run of these tests.
+swapped at run time, not run together. *Not done:* a gate-level run of these tests (only the feature 18 smoke test runs on the post-layout netlist).
 
 **Limit: no bus-busy detection in `i2c_mm.pio`.** The program arbitrates bit by bit *after* a START and
 synchronises SCL with slower masters, but nothing in it checks that the bus is free *before* the START,
@@ -1124,4 +1125,4 @@ Each transfer is one FIFO word: bit 0 = op (0 reset, 1 transfer), bits [5:1] = n
 
 *Limits / not done.* Only the high colour bit of each channel is driven (8 colours at about two thirds brightness; the CPU cannot refresh a framebuffer, so there is no bitmap, and the demo is a fixed bar pattern with a programmable palette). No real monitor. 24 MHz gives 57 Hz rather than 60. Tearing-free per-frame palette changes need the CPU to write during the blanking interval; mid-frame changes would show as a colour change at the next picture line.
 
-**Post-layout PIO smoke test (`test/test_pio_gl.py`).** A short cocotb test that runs in the RTL job and in the Tiny Tapeout gate-level job (`COCOTB_TEST_MODULES = test,test_pio_gl`). Through the real boot path (GPIO bootloader, hand-off stub, flash) it runs a host-built image (`tools/build_pio_gl_smoke.py`): SM0 (`pio/gl_echo.pio`) pulls a word, inverts and bit-reverses it and pushes it back; SM1 (`pio/gl_pulses.pio`) waits for IRQ 0 and sends a burst of 4 pulses on pad uo_out[7]. The CPU shows the echoed byte on the pads for three words, and the test checks the three values in order, 12 pulses of exactly 4 clocks high / 10 clock period, a low pad at the end and the expected `uio_oe`. It exercises the flattened PIO FIFOs, shifter, ISA decode, IRQ flags, clock divider, pin muxing and bus handshake in the placed netlist. Cycle budgets are generous because the gate-level QSPI runs at the slow default speed.
+**Post-layout PIO smoke test (`test/test_pio_gl.py`).** A short cocotb test that runs in the RTL job and in the Tiny Tapeout gate-level job (`COCOTB_TEST_MODULES = test,test_pio_gl`). Through the real boot path (GPIO bootloader, hand-off stub, flash) it runs a host-built image (`tools/build_pio_gl_smoke.py`): SM0 (`pio/gl_echo.pio`) pulls a word, inverts and bit-reverses it and pushes it back; SM1 (`pio/gl_pulses.pio`) waits for IRQ 0 and sends a burst of 4 pulses on pad uo_out[7]. The CPU shows the echoed byte on the pads for three words, and the test checks the three values in order, 12 pulses of exactly 4 clocks high / 10 clock period, a low pad at the end and the expected `uio_oe`. It exercises the flattened PIO FIFOs, shifter, ISA decode, IRQ flags, clock divider, pin muxing and bus handshake in the placed netlist. Cycle budgets are generous because the gate-level QSPI runs at the slow default speed. **Result:** it ran in the real `gl_test` job on the post-layout netlist and passed, 12/12 tests in 2,587 s. CI time: this one test makes `gl_test` take about 50 minutes instead of about 6, which fits GitHub's default job limit (360 minutes).
