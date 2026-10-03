@@ -14,7 +14,7 @@ from-scratch RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make` in `test/`): **69 cocotb protocol tests**
+**Test counts** (all run by `make` in `test/`): **71 cocotb protocol tests**
 (`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 13 PIO Verilog
 testbenches**: 10 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
 `tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`, `tb_pio_cpu_onewire.v`) and 3 that
@@ -151,7 +151,7 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 69 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
+- 71 cocotb protocol tests (`test/test_pio_protocols.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
@@ -330,7 +330,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all wired into CI, all gating the
       build, all 11 cocotb tests + all 28 standalone tests (15 CPU and
-      peripheral, 13 PIO) + the 69 PIO protocol cocotb tests currently
+      peripheral, 13 PIO) + the 71 PIO protocol cocotb tests currently
       passing
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on

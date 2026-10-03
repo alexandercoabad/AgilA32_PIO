@@ -1081,3 +1081,5 @@ Each transfer is one FIFO word: bit 0 = op (0 reset, 1 transfer), bits [5:1] = n
 *CPU-driven demo (`tools/build_pio_onewire.py`, `test/tb_pio_cpu_onewire.v`).* The CPU resets the bus (LED_OUT = 0xA0 present / 0xA1 absent), sends READ ROM (0x33), reads 8 bytes and shows each on LED_OUT. The testbench decodes the bus itself, checks CRC-8 (poly 0x8C reflected), the reset and gap lengths, the command byte and all 64 read slots, and flags any slot violation.
 
 *Not done:* overdrive speed, strong pull-up (needs a second pin), ROM search (CPU code on top of 1-bit transfers), a real device.
+
+**Mutation sweep of the slave programs.** `tools/i2c_slave_mutation_sweep.py` breaks `i2c_slave_rx.pio` / `i2c_slave_tx.pio` one line at a time (29 mutants: address compare, ACK polarity and release, byte count, sampling edge, clock stretching, NAK handling, START detection, ...) on a temporary copy of the project and checks that a slave test fails for each; all 29 are caught by an assertion. The first run found three holes in the tests, now closed (see `CHANGES_feature12.md`, last addendum).

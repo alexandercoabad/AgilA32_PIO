@@ -82,3 +82,26 @@ New tests, kept as a reproducer for the numbers above: `test_mm_no_bus_busy_chec
 be changed together with the docs if the program ever gains a check), and
 `test_mm_host_bus_free_wait_protects_the_other_master_early` / `_late`.
 Also: a comment block in `pio/i2c_mm.pio` and a note in `docs/info.md`, `README.md`. No RTL or program-code change.
+
+## Addendum: slave mutation sweep (69 -> 71 tests, all pass)
+Until now only `i2c_mm` and the CPU bench had been mutation-checked. `tools/i2c_slave_mutation_sweep.py` applies
+29 single-line breaks, one at a time, to `i2c_slave_rx.pio` (15) and `i2c_slave_tx.pio` (14) -- no address
+compare, ACK polarity, never releasing SDA, byte count +-1, sampling edge, stretch removed, NAK ignored, START
+detector weakened, bit counter not reset, ... -- and runs the 12 slave tests against each (`--list` shows them).
+It works on a temporary copy of the project, so the working tree is never modified; about 12 minutes in all.
+
+First pass: 20 caught cleanly, but it exposed three weaknesses in the TESTS (the programs were fine):
+
+| Finding | Mutant | Fix |
+|---|---|---|
+| **Survived**: nothing noticed | START detector without its "SDA high" precondition | `test_i2c_slave_rx_stays_silent_during_other_devices_traffic`: another master talks to another slave with zero-heavy data; our slave must push nothing, drive nothing, and still serve its own write afterwards |
+| Caught **only by the speed sweep** | sampling SDA just after SCL falls instead of at the rising edge | `test_i2c_slave_rx_fast_data_change_after_scl_fall`: a master that changes SDA one clock after the fall (legal) with fully alternating bytes. The master model gained a `hold=` parameter (default unchanged: a quarter period) |
+| Caught **only by hanging** (7 mutants) | no address compare, ACKing writes, ignoring NAK, ... | `feed_tx` / `drain_rx` loops bounded to 30,000 iterations (a normal transfer needs about 1,500), so a broken slave fails in seconds with "master script never finished ..." instead of timing out |
+
+Second pass after the fixes: **all 29 mutants are caught by an assertion**; none survive, none rely on a hang.
+Safeguards: a mutation that does not apply is reported as an error rather than a pass; the sweep refuses to start
+unless its copy of both programs is identical to the repository's, and checks again at the end. (An earlier
+scratch run of mine was interrupted mid-mutation and left a mutated file behind; its "restored" check compared
+against the mutated state. The tool now compares against the repository's files, and that run was discarded.)
+Re-verified on this revision: full suite 71/71; the three formerly weak mutants (R15, R11, T1) are caught.
+
