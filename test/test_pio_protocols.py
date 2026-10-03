@@ -1650,9 +1650,12 @@ async def test_onewire_write_slot_timing(dut):
     slave = OneWireSlave(us=US)
     bus, world, prog = await ow_setup(dut, slave)
     await bus.set_enable(0)
-    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), None)])
+    r = await ow_session(bus, [(OW_RESET, 31), (ow_xfer(8, 0x33), 24)])
     await ow_cmd(bus, ow_read(1))                              # one more slot: waits until the write is done
     assert r[0] == 0
+    # every slot shifts exactly ONE bit into the RX word, write-0 slots included (the dummy IN after the 0-slot's
+    # recovery); the released line reads 1 in all eight: without the dummy IN only the four 1-slots would shift
+    assert r[1] == 0xFF, "write returned %#x, expected 0xFF (one sample per slot)" % r[1]
     assert slave.cmds == [[0x33]], slave.cmds
     assert [b for _, _, b in slave.slots[:8]] == [1, 1, 0, 0, 1, 1, 0, 0]
     for t_fall, low, bit in slave.slots[:8]:

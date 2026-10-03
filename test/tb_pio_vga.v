@@ -206,8 +206,10 @@ module tb_pio_vga;
 
         // colour bars: white yellow cyan green magenta red blue black (c = R + 2G + 4B)
         palA[0]=3'd7; palA[1]=3'd3; palA[2]=3'd6; palA[3]=3'd2; palA[4]=3'd5; palA[5]=3'd1; palA[6]=3'd4; palA[7]=3'd0;
-        // second palette: shuffled, still ends with black
-        palB[0]=3'd4; palB[1]=3'd1; palB[2]=3'd5; palB[3]=3'd2; palB[4]=3'd6; palB[5]=3'd3; palB[6]=3'd7; palB[7]=3'd0;
+        // second palette: shuffled, black in the MIDDLE and a coloured LAST bar. (The first palette ends with
+        // black, so the `set pins, 8` that blanks the line after the last bar was never observable with it:
+        // mutation sweep mutant V12 survived until this palette was changed.)
+        palB[0]=3'd4; palB[1]=3'd1; palB[2]=3'd5; palB[3]=3'd2; palB[4]=3'd0; palB[5]=3'd3; palB[6]=3'd7; palB[7]=3'd6;
 
         load_prog(0, 23, 0);
         load_prog(23, 9, 1);

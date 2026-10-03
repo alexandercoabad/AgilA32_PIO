@@ -395,6 +395,9 @@ tools/
   build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
   pio_i2c.py, pio_i2c_mm.py, pio_i2c_slave.py, pio_usb.py   host-side helpers / transaction models used by the cocotb tests
   i2c_slave_mutation_sweep.py   breaks the I2C slave programs one line at a time and checks the tests catch each mutant
+  onewire_mutation_sweep.py     same for the 1-Wire master program (23 mutants)
+  vga_mutation_sweep.py         same for the two VGA programs (23 mutants)
+  mutation_common.py            shared engine of the three mutation sweeps
   sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
