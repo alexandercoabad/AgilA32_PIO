@@ -1,0 +1,13 @@
+; Post-layout smoke test, state machine B: waits for IRQ 0 from gl_echo, then drives FOUR pulses on pin 7.
+; At CLKDIV 2 each pulse is high 4 clocks (set pins, 1 [1] = 2 ticks) and the period is 10 clocks
+; (4 high + 6 low: set pins, 0 [1] + jmp x-- = 3 ticks).  The test measures exactly these widths.
+; Five words at origin 5.  Config: SET_BASE = 7, SET_COUNT = 1, CLKDIV 2.
+.program gl_pulses
+.wrap_target
+    wait 1 irq 0
+    set x, 3
+burst:
+    set pins, 1 [1]
+    set pins, 0 [1]
+    jmp x-- burst
+.wrap

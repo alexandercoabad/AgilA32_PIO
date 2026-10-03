@@ -333,7 +333,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       (`test/tb_timer_pwm.v`, `test/tb_ebreak_halt.v`,
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all in `make standalone-tests` (run in CI by `.github/workflows/pio-tests.yaml`;
-      `test.yaml` itself runs `make` only); all 11 on-chip cocotb tests + all 31 standalone tests (15 CPU and
+      `test.yaml` itself runs `make` only); all 12 on-chip cocotb tests + all 31 standalone tests (15 CPU and
       peripheral, 16 PIO) + the 76 PIO protocol cocotb tests currently
       passing in simulation (the new workflow has not run on GitHub yet)
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
@@ -393,18 +393,21 @@ tools/
   build_st7789_flash_image.py  real ST7789 LCD driver, PagedAsm-based, bank-switched
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
+  gl_echo.pio / gl_pulses.pio   (in pio/) programs of the post-layout smoke test, built by tools/build_pio_gl_smoke.py
   pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py, build_pio_spi4.py, build_pio_jtag.py, build_pio_onewire.py, build_pio_vga.py   PIO assembler/disassembler, flash-image host library, UART demo
   build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_ws2812_repeat.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
   pio_i2c.py, pio_i2c_mm.py, pio_i2c_slave.py, pio_usb.py   host-side helpers / transaction models used by the cocotb tests
   i2c_slave_mutation_sweep.py   breaks the I2C slave programs one line at a time and checks the tests catch each mutant
   onewire_mutation_sweep.py     same for the 1-Wire master program (23 mutants)
   vga_mutation_sweep.py         same for the two VGA programs (23 mutants)
+  gl_smoke_mutation_sweep.py   same for the post-layout smoke test (16 mutants of the two programs and pio_sm.v)
   ws2812_repeat_mutation_sweep.py   same for the WS2812 repeat-colour program (18 mutants)
   mutation_common.py            shared engine of the three mutation sweeps
   sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
+  test_pio_gl.py          cocotb post-layout smoke test (also runs in the gate-level CI job): PIO echo + pulse programs through the pads; image `pio_gl_smoke_flash_image.hex`
   tb_check.v              standalone: same three scenarios as a single self-contained Icarus testbench
   tb_qspi_engine.v        standalone: QSPI engine bit-level protocol + byte-order check
   spi_ram_model.v         behavioral single-line SPI RAM model (flash CS0 and PSRAM CS1), for the tests below
@@ -443,7 +446,7 @@ external flash are in [docs/info.md](docs/info.md).
 ```
 cd test
 pip install -r requirements.txt
-make                    # cocotb: self-test, demo counter, full bootload-and-run
+make                    # cocotb: self-test, demo counter, full bootload-and-run, PIO post-layout smoke test (test_pio_gl.py)
 make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, external-window, full-CPU,
                          # self-test/bootload, FLASH_MODE handoff, FLASH_PAGE bank-switching, ST7789 driver,
                          # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO

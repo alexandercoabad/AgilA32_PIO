@@ -1,0 +1,13 @@
+; Post-layout smoke test, state machine A: a tiny word "echo" through the TX FIFO, the ISA and the RX FIFO.
+;   result = bit_reverse(~word)      (so a stuck bit, a swapped shift direction or a broken FIFO shows up)
+; then IRQ 0 tells state machine B (gl_pulses.pio) to put a four-pulse burst on pin 7.
+; Five words at origin 0.  Config: no pins, shift defaults, CLKDIV 1.  Used by tools/build_pio_gl_smoke.py and
+; test/test_pio_gl.py (which runs against the gate-level netlist in CI).
+.program gl_echo
+.wrap_target
+    pull block
+    mov x, ~osr
+    mov isr, ::x
+    push block
+    irq set 0
+.wrap
