@@ -678,10 +678,11 @@ class I2cMaster:
     """
 
     def __init__(self, script, period=64, start_at=0, t_free=128, name="M2", join_start=False,
-                 sample_delay=8):
+                 sample_delay=8, hold=None):
         self.script, self.period, self.start_at, self.t_free, self.name = script, period, start_at, t_free, name
         self.join_start = join_start        # START the moment another master's START is seen
         self.sample_delay = sample_delay
+        self.hold = hold if hold is not None else period // 4   # SDA stays put this long after SCL falls
         self.low = 0                     # 0x100 = pulling SDA low, 0x200 = pulling SCL low
         self.sda = self.scl = 1
         self.cycle = 0
@@ -761,7 +762,7 @@ class I2cMaster:
             return False
         yield from self._high_remaining(2 * q - self.sample_delay)
         self._scl(0)
-        yield q
+        yield self.hold
         return True
 
     def _write_byte(self, byte):
@@ -778,7 +779,7 @@ class I2cMaster:
         self.acks.append(self.sda)
         yield from self._high_remaining(2 * q - self.sample_delay)
         self._scl(0)
-        yield q
+        yield self.hold
         self._byte_no += 1
         return True
 

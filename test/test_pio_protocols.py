@@ -1131,7 +1131,7 @@ async def slave_setup(dut, slave, master):
     return bus, world
 
 
-async def drain_rx(bus, n, master, extra=6000, timeout=60000):
+async def drain_rx(bus, n, master, extra=6000, timeout=30000):
     """Collect up to `n` RX bytes; return once the master script is done (plus `extra` clocks)."""
     got, tail = [], extra
     for _ in range(timeout):
@@ -1209,7 +1209,7 @@ async def test_i2c_slave_rx_single_byte_mode_and_all_values(dut):
     assert m.acks[:8] == [0, 0] * 4 and m.acks[8] == 1, m.acks
 
 
-async def feed_tx(bus, slave_words, master, timeout=200000, extra=4000):
+async def feed_tx(bus, slave_words, master, timeout=30000, extra=4000):
     """Keep the 4-deep TX FIFO topped up with `slave_words` until the master script is done."""
     i, tail = 0, extra
     for _ in range(timeout):
@@ -1221,7 +1221,7 @@ async def feed_tx(bus, slave_words, master, timeout=200000, extra=4000):
             tail -= 1
             if tail <= 0:
                 return
-    raise TimeoutError("master script never finished")
+    raise TimeoutError("master script never finished (slave hung or never answered; %d words queued)" % len(slave_words))
 
 
 @cocotb.test()
@@ -1751,3 +1751,41 @@ async def test_onewire_clock_tolerance(dut):
         "%.1f" % k: ("ok" if v else "FAIL") for k, v in results.items()})
     for d in (22.8, 24.0, 25.2):
         assert results[d], "must work at CLKDIV %.1f (%+.1f %%): %s" % (d, (d / 24 - 1) * 100, results)
+
+
+@cocotb.test()
+async def test_i2c_slave_rx_fast_data_change_after_scl_fall(dut):
+    """A legal master may change SDA only ONE clock after SCL falls (t_HD;DAT is allowed to be tiny). The
+    slave must sample on the RISING edge, so every bit pattern -- here fully alternating 0x55/0xAA/0x00/0xFF --
+    still arrives intact.  (A slave that sampled just after the fall would read the NEXT bit.)"""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0x55), ("write", 0xAA),
+                   ("write", 0x00), ("write", 0xFF), ("stop",)], period=96, hold=1)
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=4), m)
+    got = await drain_rx(bus, 4, m)
+    assert got == [0x55, 0xAA, 0x00, 0xFF], [hex(g) for g in got]
+    assert m.acks == [0, 0, 0, 0, 0], m.acks
+
+
+@cocotb.test()
+async def test_i2c_slave_rx_stays_silent_during_other_devices_traffic(dut):
+    """Bystander: another master talks to ANOTHER slave (0x55) with data full of zero bits, which pulls SDA
+    low while SCL is high-or-rising.  Our slave must neither push anything, nor drive SDA/SCL, nor lose its
+    place: START detection must really be 'SDA FALLS while SCL is high', not merely 'SDA is low'.  Its own
+    transaction right afterwards must still work."""
+    other = I2cSlave(addr=0x55)
+    m = I2cMaster([("start",), ("write", 0xAA), ("write", 0x00), ("write", 0x00), ("write", 0x00),
+                   ("write", 0xFF), ("write", 0x00), ("stop",),
+                   ("start",), ("write", 0x84), ("write", 0x11), ("write", 0x22), ("stop",)])
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    world.devs.append(other)
+    drove = []
+
+    async def watch():                       # was the PIO ever driving the bus during the bystander phase?
+        while len(m.acks) < 6:
+            drove.append(world.mlow & 0x300)
+            await ClockCycles(dut.clk, 1)
+    cocotb.start_soon(watch())
+    got = await drain_rx(bus, 2, m)
+    assert not any(drove), "slave drove the bus during somebody else's transaction (%d cycles)" % sum(1 for d in drove if d)
+    assert [b for k, b in other.rx if k == "D"] == [0, 0, 0, 0xFF, 0], other.rx
+    assert got == [0x11, 0x22], "only OUR transaction may reach the FIFO: %s" % [hex(g) for g in got]
