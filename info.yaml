@@ -5,7 +5,7 @@ project:
   discord:      "alexandercoabad_25756"      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
   description:  "A from-scratch RV32I CPU plus RP2040-compatible PIO state machines: firmware-programmable protocol emulator (UART/SPI/... loaded after fabrication)."
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
-  clock_hz:     24000000      # 24 MHz -- 2x the 12 MHz PIO tick low-speed USB needs; matches CLOCK_PERIOD in src/config.json (41.667 ns). Post-layout limit was 46.5 MHz (slow corner), measured at a relaxed 1 MHz target.
+  clock_hz:     24000000      # 24 MHz -- 2x the 12 MHz PIO tick low-speed USB needs; matches CLOCK_PERIOD in src/config.json (41.667 ns). Post-layout limit is 46.5 MHz (slow corner); confirmed by a GDS run at this 24 MHz period (setup slack +20.2 ns).
 
   # How many tiles your design occupies? A single IHP tile is roughly 200x150 uM.
   tiles: "6x4"          # Jane Street protocol-emulator ASIC competition: 6x4 tiles. (CPU alone was ~0.174 mm2 / ~10 tiles; the 2-SM PIO block roughly doubles generic-gate count -- re-run the real flow to confirm fit.)

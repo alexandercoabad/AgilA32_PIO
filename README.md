@@ -189,7 +189,7 @@ shifters, with behaviour unchanged (all PIO testbenches still pass). The
 register timing estimate from a Yosys JSON netlist and a liberty file.
 
 **Honest limits.** Two state machines (the RP2040 has eight), a shared
-32-word instruction memory, pins 0-9 only, and a 24 MHz clock in `info.yaml` (the flow has not yet been re-run at that period; the last GDS run used a relaxed 1 MHz target).
+32-word instruction memory, pins 0-9 only, and a 24 MHz clock in `info.yaml` (confirmed by a GDS run at that period: worst setup slack +20.2 ns in the slow corner, i.e. a register-to-register limit of about 46.5 MHz and roughly 1.9x margin; hold met in all corners; the layout is identical to the 1 MHz run).
 The CPU costs about 3000 clock cycles per queued word (flash paging), so a
 bus must be slower than that per byte for firmware to stay ahead of it -- the
 FIFOs and the halt-and-continue behaviour above are how this is worked

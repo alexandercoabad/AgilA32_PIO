@@ -884,8 +884,15 @@ bus is released (idle J from the external pull-up on D- and the host pull-downs)
 is not transmitting. Clock: 8 PIO ticks per bit, so **24 MHz core clock and CLKDIV 2 give exactly
 1.5 Mb/s** (12 MHz tick); this is why `info.yaml` / `src/config.json` now say 24 MHz (41.667 ns).
 The first GDS run, at a relaxed 1 MHz target, reported a register-to-register limit of 21.5 ns
-(46.5 MHz) in the slow corner, so 24 MHz leaves about 1.9x margin -- to be confirmed by re-running
-the flow at the new period.
+(46.5 MHz) in the slow corner, so 24 MHz leaves about 1.9x margin. **Confirmed by a GDS run at
+41.667 ns:** worst setup slack +20.17 ns in the slow corner (1.08 V, 125 C; worst path 22.1 ns arrival,
+register to register), +27.6 ns typical, +29.6 ns fast, no setup violations (TNS 0) in any corner;
+worst hold slack +0.116 ns (fast corner), no hold violations; 0 Magic DRC, 0 routing DRC, 0 LVS errors,
+0 antenna-violating nets. Synthesis, placement and routing came out identical to the 1 MHz run (same 36,601
+cells, same 3,605 hold buffers, same wirelength) because nothing needed repair at the tighter period. Unchanged
+design-rule advisories, not failures: 44 max-slew violations (slow corner only), 258 max-fanout and 1 max-cap
+violations. The gate-level tests (11/11) run the CPU and boot path only; no PIO behaviour has been simulated on the
+post-layout netlist.
 
 *TX* (`tx_start`): FIFO word 0 = number of bits - 1, then the packet's bits LSB first, 32 per word.
 The bits are the **logical, already bit-stuffed** bits including SYNC (`tools/pio_usb.py` builds
@@ -989,8 +996,7 @@ that START at the same moment is exactly what arbitration is for, and that is te
 stuck slave never becomes free: the host needs a timeout and a recovery (nine SCL pulses), neither of which
 exists here.
 
-**Tests** (`test_pio_protocols.py`, 57 in all): 5 multi-master, 9 slave, plus
-`test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table. Models: `I2cMaster`, `I2cMM`,
+**Tests** (`test_pio_protocols.py`; 76 in all as of feature 17): 14 multi-master (5 arbitration/clock-sync, 5 more, 4 bus-busy), 12 slave (including `test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table). Models: `I2cMaster`, `I2cMM`,
 `I2cSlaveRx`, `I2cSlaveTx` in `pio_tb_lib.py` / the helper modules.
 
 **CPU-driven slave demo.** `tools/build_pio_i2c_slave.py` + `test/tb_pio_cpu_i2c_slave.v`, one flash
@@ -1003,6 +1009,8 @@ queues the two words and executes `EBREAK`. The master then reads two bytes and 
 core halted. It exercises exactly the thing a combined slave would need and cannot have at 29 + 32
 words: the CPU does the bookkeeping between two direction-specific programs. Mutation check: making
 the CPU add 2 instead of 1 fails the bench (`read back a7 3e`).
+
+**Mutation sweep of the slave programs.** `tools/i2c_slave_mutation_sweep.py` breaks `i2c_slave_rx.pio` / `i2c_slave_tx.pio` one line at a time (29 mutants: address compare, ACK polarity and release, byte count, sampling edge, clock stretching, NAK handling, START detection, ...) on a temporary copy of the project and checks that a slave test fails for each; all 29 are caught by an assertion. The first run found three holes in the tests, now closed (see `CHANGES_feature12.md`, last addendum).
 
 **CPU-driven PS/2 receiver demo (feature 13).** `tools/build_pio_ps2_rx.py` + `test/tb_pio_cpu_ps2.v`.
 The CPU loads `ps2_rx.pio` (CLKDIV 17: 288 PIO cycles x 17 = 4896 clocks = 204 us at 24 MHz, inside the
@@ -1082,8 +1090,6 @@ Each transfer is one FIFO word: bit 0 = op (0 reset, 1 transfer), bits [5:1] = n
 *CPU-driven demo (`tools/build_pio_onewire.py`, `test/tb_pio_cpu_onewire.v`).* The CPU resets the bus (LED_OUT = 0xA0 present / 0xA1 absent), sends READ ROM (0x33), reads 8 bytes and shows each on LED_OUT. The testbench decodes the bus itself, checks CRC-8 (poly 0x8C reflected), the reset and gap lengths, the command byte and all 64 read slots, and flags any slot violation.
 
 *Not done:* overdrive speed, strong pull-up (needs a second pin), ROM search (CPU code on top of 1-bit transfers), a real device.
-
-**Mutation sweep of the slave programs.** `tools/i2c_slave_mutation_sweep.py` breaks `i2c_slave_rx.pio` / `i2c_slave_tx.pio` one line at a time (29 mutants: address compare, ACK polarity and release, byte count, sampling edge, clock stretching, NAK handling, START detection, ...) on a temporary copy of the project and checks that a slave test fails for each; all 29 are caught by an assertion. The first run found three holes in the tests, now closed (see `CHANGES_feature12.md`, last addendum).
 
 **VGA 640x480 colour bars (`pio/vga_frame.pio` + `pio/vga_line.pio`).** The Tiny Tapeout VGA Pmod hangs on `uo_out`: bits 0-2 = R1 G1 B1, bit 3 = VSYNC, bits 4-6 = R0 G0 B0, bit 7 = HSYNC (pinout from the Tiny Tapeout specs page). Two state machines at CLKDIV 1, so one PIO tick is one pixel clock; together they fill all 32 instruction words (23 + 9).
 
