@@ -315,9 +315,11 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `tools/pio_host.py` -- see docs/info.md's "PIO" section and
       `CHANGES_feature6.md`. Built for the Jane Street protocol-emulator
       ASIC competition (6x4 tiles).
-- [x] Twenty test suites (see "Testing locally" below): on-chip
-      cocotb regression (self-test, demo counter, full bootload-and-run)
-      plus fifteen standalone Icarus testbenches -- QSPI engine
+- [x] Test suites (see "Testing locally" below): on-chip
+      cocotb regression (self-test, demo counter, full bootload-and-run),
+      71 cocotb PIO protocol tests, and 30 standalone Icarus testbenches
+      (15 CPU and peripheral, listed next, plus the 15 PIO ones from the
+      protocol table above) -- QSPI engine
       bit-level protocol, external-window integration via direct bus
       driving, full CPU-driven external load/store, self-test/bootload,
       `FLASH_MODE` handoff to external flash, `FLASH_PAGE`
@@ -329,8 +331,8 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       variable SPI clock divider, and the generic SPI peripheral
       (`test/tb_timer_pwm.v`, `test/tb_ebreak_halt.v`,
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
-      `test/tb_spi_periph.v`) -- all wired into CI, all gating the
-      build, all 11 cocotb tests + all 30 standalone tests (15 CPU and
+      `test/tb_spi_periph.v`) -- all in `make standalone-tests` (not yet in the CI workflow, which runs `make`
+      only); all 11 on-chip cocotb tests + all 30 standalone tests (15 CPU and
       peripheral, 15 PIO) + the 71 PIO protocol cocotb tests currently
       passing
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
@@ -372,6 +374,10 @@ pio/
   ws2812.pio              WS2812 / SK6812 LED data line (4 instructions, side-set pin, idle low)
   onewire.pio             1-Wire master (reset/presence, write and read slots; command word per transfer)
   vga_frame.pio, vga_line.pio   640x480 VGA colour bars on the Tiny VGA Pmod (two state machines, 23 + 9 words)
+  jtag.pio                JTAG master (TAP walk, IDCODE / USER register scans)
+  usb_ls.pio              low-speed USB host engine (NRZI, bit stuffing, EOP; 29 words)
+  i2c_mm.pio              I2C multi-master (arbitration, clock synchronisation; 27 words)
+  i2c_slave_rx.pio, i2c_slave_tx.pio   I2C slave receive / transmit programs (swapped by the CPU at run time)
 tools/
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you
@@ -386,6 +392,10 @@ tools/
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
   pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py, build_pio_spi4.py, build_pio_jtag.py, build_pio_onewire.py, build_pio_vga.py   PIO assembler/disassembler, flash-image host library, UART demo
+  build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
+  pio_i2c.py, pio_i2c_mm.py, pio_i2c_slave.py, pio_usb.py   host-side helpers / transaction models used by the cocotb tests
+  i2c_slave_mutation_sweep.py   breaks the I2C slave programs one line at a time and checks the tests catch each mutant
+  sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
@@ -430,11 +440,19 @@ pip install -r requirements.txt
 make                    # cocotb: self-test, demo counter, full bootload-and-run
 make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, external-window, full-CPU,
                          # self-test/bootload, FLASH_MODE handoff, FLASH_PAGE bank-switching, ST7789 driver,
-                         # PS/2 reader/ASCII, and asm_pineapple.py instruction-encoding tests
+                         # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO
+                         # testbenches (pio.v level and CPU-driven, incl. 1-Wire and VGA), and at the
+                         # end the 71 cocotb PIO protocol tests (Makefile.proto)
+make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom   # one protocol test (the longest,
+                         # test_onewire_clock_tolerance, takes about 80 s)
 ```
 
-Both targets are also run automatically by `.github/workflows/test.yaml`
-on every push, and both must pass for that workflow to go green.
+The PIO testbenches need Icarus Verilog (`apt-get install iverilog`); the cocotb ones need
+`pip install -r requirements.txt`.
+
+`.github/workflows/test.yaml` currently runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests`
+(the 30 Icarus testbenches and the 71 protocol tests, about 8 minutes) is run by hand; adding it as a second step of that
+workflow would put it under CI, but that has not been done.
 
 ## External memory over QSPI
 
