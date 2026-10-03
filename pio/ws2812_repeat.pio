@@ -1,0 +1,51 @@
+; WS2812 / SK6812 "repeat colour" driver for LONG strips: one pair of FIFO words paints a whole run of identical
+; pixels, so the CPU does not have to feed a word per pixel (it manages about one word per ~3000 clocks at 24 MHz,
+; a pixel takes 720).  Same bit timing as ws2812.pio: 10 PIO ticks per bit, CLKDIV 3 at 24 MHz -> tick 125 ns.
+;
+; Command = TWO TX words:
+;     word 1 : N - 1        (number of pixels in the run, minus one; 0 = one pixel)
+;     word 2 : the pixel    (24 bits: GRB << 8, sent MSB first; for RGBW set pull threshold 32 and use all 32 bits)
+; Queue as many commands as you like back to back; the line idles LOW while the TX FIFO is empty, so a gap of at
+; least the strip's reset time (50 us WS2812, 80-280 us newer parts) latches the frame.  Keep the FIFO fed without a
+; gap that long between two commands of the same frame.
+;
+; Wiring: SIDESET_BASE = the data pin, 1 side-set bit (not optional).  Shift config: shift LEFT (MSB first), autopull
+; OFF, pull threshold 24 (32 for RGBW) -- `jmp !osre` uses the threshold to find the end of the pixel.
+; Registers: X = bit being sent, Y = pixels left, ISR = the pixel (reloaded into OSR for every repetition).
+;
+; Timing (ticks): high 3 for a 0, 7 for a 1; low after a bit INSIDE a pixel 7 (after a 0) or 3 (after a 1), exactly
+; as ws2812.pio.  The extra instructions that reload the pixel stretch the LOW time at the borders:
+;     between two pixels of a run : after a 1 -> 4 ticks (500 ns),  after a 0 -> 8 ticks (1.0 us)
+;     between two commands        : after a 1 -> 9 ticks (1.125 us), after a 0 -> 12 ticks (1.5 us)
+; A strip decides 0/1 by the width of the HIGH pulse and latches only after a LOW of 50 us or more, so a longer low is
+; expected to be harmless -- but it is OUTSIDE the nominal T0L / T1L +-150 ns windows and has not been tried on a real
+; strip.  tests/ pin the exact numbers (test_ws2812_repeat_*).
+.program ws2812_repeat
+.side_set 1
+.define public T1 3
+.define public T2 4
+.define public T3 3
+
+.wrap_target
+cmd:
+    pull block        side 0         ; N - 1 (stalls here with the line low when nothing is queued)
+    mov y, osr        side 0
+    pull block        side 0         ; the pixel
+    mov isr, osr      side 0
+pixel:
+    mov osr, isr      side 0         ; reload the pixel
+    out x, 1          side 0         ; its first bit (the 3 low ticks of the border are jmp y--, mov, out)
+    jmp dispatch      side 0
+bitloop:
+    out x, 1          side 0 [T3 - 1]
+dispatch:
+    jmp !x do_zero    side 1 [T1 - 1]
+do_one:
+    jmp !osre bitloop side 1 [T2 - 1]
+    jmp y-- pixel     side 0         ; last bit of the pixel was a 1: next pixel of the run ...
+    jmp cmd           side 0         ; ... or the run is over
+do_zero:
+    nop               side 0 [T2 - 2]
+    jmp !osre bitloop side 0
+    jmp y-- pixel     side 0         ; last bit was a 0 (falls through to `cmd` when the run is over)
+.wrap

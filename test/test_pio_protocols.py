@@ -1792,3 +1792,125 @@ async def test_i2c_slave_rx_stays_silent_during_other_devices_traffic(dut):
     assert not any(drove), "slave drove the bus during somebody else's transaction (%d cycles)" % sum(1 for d in drove if d)
     assert [b for k, b in other.rx if k == "D"] == [0, 0, 0, 0xFF, 0], other.rx
     assert got == [0x11, 0x22], "only OUR transaction may reach the FIFO: %s" % [hex(g) for g in got]
+
+
+# ============================================================================= WS2812 repeat-colour program
+# `ws2812_repeat.pio`: one pair of TX words (N-1, pixel) paints a run of N identical pixels.  Ticks of 3 clocks.
+async def wsr_setup(dut, pull_thresh=24, reset_us=50.0):
+    bus, world = await setup(dut, period_ns=WS_CLK_NS)
+    prog = load_src("ws2812_repeat.pio")
+    await bus.load_program(prog)
+    await bus.sm_setup(0, prog, side_base=0, autopull=False, pull_thresh=pull_thresh,
+                       out_right=False, div=(WS_TICK_CLK, 0))
+    strip = Ws2812Strip(pin=0, clk_ns=WS_CLK_NS, reset_us=reset_us)
+    world.devs.append(strip)
+    await bus.write(R_PIN_OWN, 0b001)
+    return bus, world, strip
+
+
+def wsr_words(runs):
+    """TX words of a list of (count, pixel_word) runs."""
+    out = []
+    for n, px in runs:
+        out += [n - 1, px]
+    return out
+
+
+def wsr_check(strip, runs, nbits=24):
+    """One frame holding exactly the runs; every HIGH pulse exact (3 ticks = 0, 7 ticks = 1) and every LOW pulse
+    exactly the number of ticks documented in ws2812_repeat.pio (inside a pixel / between pixels / between runs)."""
+    T = WS_TICK_CLK
+    assert len(strip.frames) == 1 and not strip.cur, (len(strip.frames), len(strip.cur))
+    frame = strip.frames[0]
+    want_px = []
+    for n, px in runs:
+        want_px += [(px >> (32 - nbits)) & ((1 << nbits) - 1)] * n if nbits == 24 else [px] * n
+    assert Ws2812Strip.pixels(frame, nbits=nbits) == want_px
+    # position class of every bit
+    cls, k = [], 0
+    for n, _ in runs:
+        for p in range(n):
+            for b in range(nbits):
+                if b < nbits - 1:
+                    cls.append("in")
+                else:
+                    cls.append("run" if p == n - 1 else "px")
+    low_ticks = {("in", 1): 3, ("in", 0): 7, ("px", 1): 4, ("px", 0): 8, ("run", 1): 9, ("run", 0): 12}
+    for i, bit in enumerate(frame[:-1]):
+        assert strip.high_clk[i] == (7 if bit else 3) * T, (i, bit, strip.high_clk[i])
+        want = low_ticks[(cls[i], bit)] * T
+        assert strip.low_clk[i] == want, "bit %d (%s, bit %d): low %d clocks, expected %d" % (
+            i, cls[i], bit, strip.low_clk[i], want)
+    assert strip.high_clk[len(frame) - 1] == (7 if frame[-1] else 3) * T
+    assert strip.glitches == 0
+
+
+@cocotb.test()
+async def test_ws2812_repeat_single_run(dut):
+    """One command, 60 identical pixels: a single frame of 60 equal pixels, no CPU feed after the two words;
+    all pulses exact."""
+    bus, world, strip = await wsr_setup(dut)
+    runs = [(60, grb(0x12, 0xA5, 0x3C))]
+    await bus.set_enable(0)
+    for w in wsr_words(runs):
+        await bus.tx_put(0, w)
+    await ClockCycles(dut.clk, 60 * 24 * WS_BIT_CLK + 6 * 1200)
+    wsr_check(strip, runs)
+
+
+@cocotb.test()
+async def test_ws2812_repeat_one_pixel_and_extremes(dut):
+    """N = 1 (count word 0) and the all-zero / all-one pixels, three commands in one frame."""
+    bus, world, strip = await wsr_setup(dut)
+    runs = [(1, grb(0, 0, 0)), (2, grb(0xFF, 0xFF, 0xFF)), (1, grb(0x80, 0x01, 0xFE))]
+    await bus.set_enable(0)
+    await ws_feed(dut, bus, wsr_words(runs))
+    await ClockCycles(dut.clk, 4 * 24 * WS_BIT_CLK + 6 * 1200)
+    wsr_check(strip, runs)
+
+
+@cocotb.test()
+async def test_ws2812_repeat_runs_back_to_back(dut):
+    """Three commands (20 red, 15 green, 10 blue) fed as FIFO room appears: ONE frame of 45 pixels, the strip
+    never latches between runs, and the borders are exactly the documented 9 / 12 tick lows."""
+    bus, world, strip = await wsr_setup(dut)
+    runs = [(20, grb(0, 0xFF, 0)), (15, grb(0xFF, 0, 0)), (10, grb(0, 0, 0xFF))]
+    await bus.set_enable(0)
+    await ws_feed(dut, bus, wsr_words(runs))
+    await ClockCycles(dut.clk, 45 * 24 * WS_BIT_CLK + 6 * 1200)
+    wsr_check(strip, runs)
+
+
+@cocotb.test()
+async def test_ws2812_repeat_long_strip_without_feeding(dut):
+    """The point of the program: 300 pixels (a 5 m strip) from ONE pair of words. The 4-deep FIFO would last 4
+    pixels with the plain program; here the FIFO is empty from the second after the start and the frame still
+    streams without a single gap longer than 1.5 us."""
+    bus, world, strip = await wsr_setup(dut)
+    runs = [(300, grb(0x20, 0x40, 0x60))]
+    await bus.set_enable(0)
+    for w in wsr_words(runs):
+        await bus.tx_put(0, w)
+    await ClockCycles(dut.clk, 20)
+    assert await bus.tx_level(0) == 0, "FIFO must be empty while the strip is still being written"
+    await ClockCycles(dut.clk, 300 * 24 * WS_BIT_CLK + 6 * 1200)
+    wsr_check(strip, runs)
+    assert max(strip.low_clk[:-1]) <= 12 * WS_TICK_CLK                 # 1.5 us
+
+
+@cocotb.test()
+async def test_ws2812_repeat_rgbw_and_latch_between_frames(dut):
+    """Pull threshold 32 gives SK6812 RGBW pixels (the pixel word is all 32 bits), and an empty FIFO for longer than
+    the reset time between two commands latches the frame: two frames of one run each."""
+    bus, world, strip = await wsr_setup(dut, pull_thresh=32)
+    a, b = (4, 0x11223344), (3, 0xF0E0D0C0)
+    await bus.set_enable(0)
+    for w in wsr_words([a]):
+        await bus.tx_put(0, w)
+    await ClockCycles(dut.clk, 4 * 32 * WS_BIT_CLK + 3000)           # frame 1 done and > 50 us of silence
+    for w in wsr_words([b]):
+        await bus.tx_put(0, w)
+    await ClockCycles(dut.clk, 3 * 32 * WS_BIT_CLK + 3000)
+    assert len(strip.frames) == 2, len(strip.frames)
+    assert Ws2812Strip.pixels(strip.frames[0], nbits=32) == [a[1]] * a[0]
+    assert Ws2812Strip.pixels(strip.frames[1], nbits=32) == [b[1]] * b[0]

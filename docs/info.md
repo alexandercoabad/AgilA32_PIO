@@ -1059,8 +1059,9 @@ exact timing and the datasheet windows, 8 pixels back to back with no extra cloc
 RGBW pixels. Mutation checks: inverting the side-set polarity, a 3-tick `T2`, a 6-tick zero pulse, and a zero pulse that never drops all fail the tests (the 3-tick `T2` passes the two tests that do not
 measure bit periods and fails the other three).
 
-*Not done:* a real strip; level shifting (WS2812 data inputs typically want about 0.7 x VDD, so a 5 V strip usually needs a 3.3 V -> 5 V shifter -- I have not checked your strip); a repeat-colour program for long strips;
-a DMA-like feed; an RGBW top-level demo.
+*Not done:* a real strip; level shifting (WS2812 data inputs typically want about 0.7 x VDD, so a 5 V strip usually needs a 3.3 V -> 5 V shifter -- I have not checked your strip); a DMA-like feed. (The repeat-colour program, the RGBW top-level demo and the 280 us-reset firmware were added in feature 17, below.)
+
+*Feature 17 additions (`CHANGES_feature17.md`).* `pio/ws2812_repeat.pio` (15 words): a command is two TX words, `N - 1` and the pixel, and paints N identical pixels without any CPU feed (the test streams 300 pixels from one pair of words with the FIFO empty). The HIGH pulses are exactly those of `ws2812.pio`; the instructions that reload the pixel lengthen the LOW time to 4 / 8 ticks between pixels and 9 / 12 ticks between commands (after a 1 / after a 0, 125 ns ticks), outside the nominal T0L / T1L windows and untried on a real strip. `tools/build_pio_ws2812.py --rgbw` and `--reset-us 280` build the top-level firmware variants (32-bit pixels; a CPU busy-wait after `PIN_OWN` that keeps the line low 343 us for 280 us parts); `tb_pio_cpu_ws2812.v` takes `+bits=32` / `+reset_us=N` / `+img=`, and the 126 us default firmware fails the 280 us check as it should. `tools/ws2812_repeat_mutation_sweep.py`: 18 mutants, all caught.
 
 **1-Wire master (`pio/onewire.pio`).** One open-drain line (DQ = PIO pin 8 = uio[4], external pull-up about 4.7 kOhm). `set pindirs, 1` pulls DQ low, `set pindirs, 0` releases it, `in pins, 1` reads it. Standard speed, 1 us tick (CLKDIV 24 at 24 MHz). 31 of 32 instruction words.
 

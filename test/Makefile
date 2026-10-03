@@ -119,6 +119,8 @@ standalone-tests:
 	vvp /tmp/tt_tb_pio_cpu_ps2.vvp | tee /tmp/tt_out_pio_cpu_ps2.log
 	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ws2812.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ws2812.v
 	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp | tee /tmp/tt_out_pio_cpu_ws2812.log
+	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp +img=pio_ws2812_rgbw_flash_image.hex +bits=32 | tee /tmp/tt_out_pio_cpu_ws2812_rgbw.log
+	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp +img=pio_ws2812_reset280_flash_image.hex +reset_us=280 | tee /tmp/tt_out_pio_cpu_ws2812_reset280.log
 	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_onewire.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_onewire.v
 	vvp /tmp/tt_tb_pio_cpu_onewire.vvp | tee /tmp/tt_out_pio_cpu_onewire.log
 	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_vga.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_vga.v
