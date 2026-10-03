@@ -1,0 +1,63 @@
+name: pio-tests
+# The PIO block's own tests: every standalone Icarus testbench (CPU-driven end-to-end benches included) and the
+# cocotb protocol suite (test/Makefile.proto). test.yaml only runs the top-level cocotb test (`make`); this one runs
+# `make standalone-tests`, which also runs Makefile.proto. Takes a long time (about an hour), hence its own workflow.
+# The mutation sweeps (tools/*_mutation_sweep.py) are run only when this workflow is started by hand.
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      mutation_sweeps:
+        description: "Also run the mutation sweeps (adds about 1 hour)"
+        type: boolean
+        default: false
+
+jobs:
+  pio:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Install iverilog
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        shell: bash
+        run: pip install -r test/requirements.txt
+
+      - name: Standalone testbenches + cocotb protocol tests
+        shell: bash
+        run: |
+          cd test
+          make standalone-tests
+          # the cocotb run returns success even when a test fails, so check results.xml (and the benches' logs)
+          ! grep -q "<failure" results.xml
+          ! grep -l "FAIL" /tmp/tt_out_*.log
+
+      - name: Mutation sweeps (manual runs only)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.mutation_sweeps }}
+        shell: bash
+        run: |
+          python3 tools/vga_mutation_sweep.py
+          python3 tools/ws2812_repeat_mutation_sweep.py
+          python3 tools/onewire_mutation_sweep.py
+          python3 tools/i2c_slave_mutation_sweep.py
+
+      - name: Upload logs
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pio-test-logs
+          path: |
+            test/results.xml
+            /tmp/tt_out_*.log
