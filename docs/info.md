@@ -1083,3 +1083,23 @@ Each transfer is one FIFO word: bit 0 = op (0 reset, 1 transfer), bits [5:1] = n
 *Not done:* overdrive speed, strong pull-up (needs a second pin), ROM search (CPU code on top of 1-bit transfers), a real device.
 
 **Mutation sweep of the slave programs.** `tools/i2c_slave_mutation_sweep.py` breaks `i2c_slave_rx.pio` / `i2c_slave_tx.pio` one line at a time (29 mutants: address compare, ACK polarity and release, byte count, sampling edge, clock stretching, NAK handling, START detection, ...) on a temporary copy of the project and checks that a slave test fails for each; all 29 are caught by an assertion. The first run found three holes in the tests, now closed (see `CHANGES_feature12.md`, last addendum).
+
+**VGA 640x480 colour bars (`pio/vga_frame.pio` + `pio/vga_line.pio`).** The Tiny Tapeout VGA Pmod hangs on `uo_out`: bits 0-2 = R1 G1 B1, bit 3 = VSYNC, bits 4-6 = R0 G0 B0, bit 7 = HSYNC (pinout from the Tiny Tapeout specs page). Two state machines at CLKDIV 1, so one PIO tick is one pixel clock; together they fill all 32 instruction words (23 + 9).
+
+- *Line machine (SM1, `vga_line`, 9 words, all in the wrap).* Free-runs 800-tick lines: HSYNC low 96 ticks (three `set pins, 0 [31]`), back porch, `irq set 0` at tick 143, a counted delay for the rest. HSYNC is pin 7 (SET base 7, 1 pin). Every line raises IRQ 0.
+- *Frame machine (SM0, `vga_frame`, 23 words).* Never counts clocks, only line IRQs: VSYNC falls on the IRQ of the last front-porch line and rises two IRQs later (exactly 1600 ticks), then 33 back-porch lines, 480 picture lines, 9 front-porch lines = 525 per frame. On a picture line it copies the ISR into the OSR and shifts out 8 bars of 3 bits (`out pins, 3 [14]` + two `nop [31]` + `jmp !osre` = exactly 80 ticks), then forces black. Because it follows the line IRQ, the picture starts at the same tick of every line (146) and no line is ever stretched. Colour pins are OUT pins 0-2; VSYNC and the black/blank level are SET pins 0-3.
+- *The palette is data.* It lives in SM0's ISR (bar 0 in bits 31:29, MSB first). To change it the CPU pushes a word and forces `pull block`, `mov isr, osr` (0x80A0, 0xA0C7); the next picture line uses it. `tb_pio_vga.v` does this during the vertical blank and checks that frame N still shows the old palette and frame N+1 the new one.
+- *Timing numbers.* 31.47 kHz / 59.94 Hz at 25.175 MHz (the standard pixel clock); at this chip's 24 MHz it is 30 kHz / 57.1 Hz, which many monitors accept but I have not tried one. The post-layout limit (about 46 MHz slow corner) leaves room for a 25.175 MHz clock from the demo board.
+
+| | ticks | VGA 640x480 spec |
+|---|---|---|
+| HSYNC low | 96 | 96 |
+| line | 800 | 800 |
+| picture start (back porch 50) | 146 | 144 nominal (tolerant) |
+| picture | 640 = 8 x 80 | 640 |
+| VSYNC low | 2 lines | 2 lines |
+| frame | 525 lines = 420000 | 525 |
+
+*Verification.* `tb_pio_vga.v` (pio.v alone) is a VGA monitor model that counts every HSYNC period, pulse width, VSYNC pulse and frame length, checks all 480 picture lines bar by bar (exact colours, 80 clocks each, same start tick, black before and after) and that every other line is black, over three frames. `tb_pio_cpu_vga.v` repeats the measurement through the real top level: the CPU (image from `tools/build_pio_vga.py`) loads both programs, pushes the palette, starts both machines with one CTRL write and executes EBREAK. Mutation-checked: 9 one-line changes to the programs (HSYNC 95 ticks, a 32-line back porch, a 79-tick bar, a one-line VSYNC, an 8-line front porch, an 801-tick line, 479 picture lines, no palette reload, an IRQ one tick late) all fail the testbenches.
+
+*Limits / not done.* Only the high colour bit of each channel is driven (8 colours at about two thirds brightness; the CPU cannot refresh a framebuffer, so there is no bitmap, and the demo is a fixed bar pattern with a programmable palette). No real monitor. 24 MHz gives 57 Hz rather than 60. Tearing-free per-frame palette changes need the CPU to write during the blanking interval; mid-frame changes would show as a colour change at the next picture line.

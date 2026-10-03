@@ -1,0 +1,25 @@
+; VGA line generator -- state machine B of the two-machine 640x480 VGA pair (see vga_frame.pio).
+; Nine instruction words, all inside the wrap, so the machine free-runs: one 800-tick line after another.
+; At CLKDIV 1 one tick = one pixel clock.  At 25.175 MHz that is exactly 31.47 kHz lines; at this chip's
+; 24 MHz clock it is 30 kHz lines (57.1 Hz frames).
+;
+;   tick   0..95    HSYNC low  (3 x 32)                         HSYNC = pin 7, active low
+;   tick  96..142   back porch, HSYNC high
+;   tick  143       IRQ 0 set  -> the frame machine wakes up; its picture starts at about tick 146
+;   tick 144..799   rest of the line (visible area 146..785, front porch)
+; Every line raises IRQ 0, visible or not: the frame machine counts them.
+;
+; Config: SET_BASE = 7, SET_COUNT = 1, CLKDIV 1.  Entry = the first word (wrap bottom).
+.program vga_line
+.wrap_target
+    set pins, 0 [31]       ; HSYNC low 96 ticks
+    set pins, 0 [31]
+    set pins, 0 [31]
+    set pins, 1 [31]       ; back porch, HSYNC high
+    set pins, 1 [14]
+    irq set 0              ; tick 143
+    set y, 23 [7]          ; 8 ticks
+dly:
+    nop [25]               ; (26 + 1) * 24 = 648 ticks
+    jmp y-- dly
+.wrap

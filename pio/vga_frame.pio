@@ -1,0 +1,49 @@
+; VGA frame machine -- state machine A of the two-machine 640x480 VGA pair (see vga_line.pio).
+; Twenty-three instruction words at origin 0 (vga_line takes words 23-31).  It owns the colour pins and
+; VSYNC, and it never counts clocks: it counts the line IRQs that vga_line raises, one per line.
+;
+;   per frame, in IRQ order (525 in total):   1  VSYNC falls (end of the last front-porch line)
+;                                             2  VSYNC low line, 1 VSYNC low line, VSYNC rises with the 3rd IRQ
+;                                             33 back-porch lines
+;                                             480 visible lines: 8 bars of 80 ticks each
+;                                             9  front-porch lines
+; Colour = {B1,G1,R1} on pins 0-2, VSYNC = pin 3 (the Tiny VGA Pmod's uo_out[3:0]); pins 4-6 (the LSB
+; colour bits) are left alone, so the picture has 8 colours at about two thirds brightness.
+;
+; The palette lives in the ISR: bar k = ISR bits [31-3k : 29-3k], bar 0 leftmost.  To change it the CPU pushes a
+; new word to the TX FIFO and forces `pull block` then `mov isr, osr` (0x80A0, 0xA0C7); it takes effect on
+; the next visible line.  Before the first enable do the same, then force `set pins, 8` (black, VSYNC high).
+;
+; Config: OUT_BASE = 0, OUT_COUNT = 3, SET_BASE = 0, SET_COUNT = 4, shift LEFT, no autopull,
+;         PULL_THRESH = 24, CLKDIV 1.  The machine starts at word 0 (no entry jump needed).
+.program vga_frame
+.wrap_target
+    wait 1 irq 0           ; last front-porch line
+    set pins, 0            ; VSYNC low, black
+    wait 1 irq 0           ; VSYNC line 1
+    wait 1 irq 0           ; VSYNC line 2
+    set pins, 8            ; VSYNC high, black
+    set x, 31
+back:
+    wait 1 irq 0           ; back porch: 32 + 1 lines
+    jmp x-- back
+    wait 1 irq 0
+    set x, 14              ; 15 * 32 = 480 visible lines
+outer:
+    set y, 31
+vis:
+    wait 1 irq 0
+    mov osr, isr           ; the palette
+bar:
+    out pins, 3 [14]       ; 15 ticks
+    nop [31]               ; 32
+    nop [31]               ; 32
+    jmp !osre bar          ; 1 -> 80 ticks per bar
+    set pins, 8            ; black again, whatever the last bar was
+    jmp y-- vis
+    jmp x-- outer
+    set x, 8               ; 9 front-porch lines
+front:
+    wait 1 irq 0
+    jmp x-- front
+.wrap
