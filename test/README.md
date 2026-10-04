@@ -200,7 +200,7 @@ limitation" note.
 
 ### PIO block tests
 
-- `make -f Makefile.proto` -- 76 cocotb tests (`test_pio_protocols.py`, models in `pio_tb_lib.py`) drive `pio.v` alone over the CPU's bus:
+- `make -f Makefile.proto` -- 94 cocotb tests (`test_pio_protocols.py` 76 + `test_pio_swd.py` 18, models in `pio_tb_lib.py`) drive `pio.v` alone over the CPU's bus:
   UART, SPI modes 0-3, I2C master / slave / multi-master, PS/2, JTAG, low-speed USB, WS2812 (plain and repeat-colour), 1-Wire.
   One test: `make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom` (an exact name or one regex; `(a|b)` does not work).
 - `tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio_vga.v` -- Verilog benches on `pio.v` alone; `tb_pio_cpu_*.v` (12) -- the real core

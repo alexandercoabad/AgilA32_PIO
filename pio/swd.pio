@@ -1,0 +1,55 @@
+; SWD (ARM Serial Wire Debug) host: SWCLK generator + SWDIO driver / sampler.  Original program.
+;
+; Pins (PIO pin numbers):  SWCLK = side-set pin 0 (uo_out[0]),  SWDIO = pin 8 (uio[4]) for OUT, SET (pindirs) and IN.
+; Config: OUT_BASE=8 (1), SET_BASE=8 (1), SIDESET_BASE=0 (1 bit, mandatory), IN_BASE=8,
+;         autopull OFF, autopush OFF, OUT shift RIGHT and IN shift RIGHT (both LSB first).
+;         PIN_OWN = 0x101 (SWCLK and SWDIO to the PIO).  SWDIO needs an external pull-up (the Pmod / target has one).
+;
+; The host talks to it in FIFO words:
+;     header   [4:0] n-1   number of SWCLK pulses minus one (1..32 pulses)
+;              [5]   read  0 = WRITE n bits, the NEXT FIFO word is the data (LSB first); the host DRIVES SWDIO
+;                          1 = READ n bits: the host RELEASES SWDIO (pindirs = 0) and samples it
+;     every command pushes exactly one RX word: a write pushes 0 (completion marker), a read pushes the bits it
+;     sampled -- the ISR shifts right, so the first bit ends up in bit (32-n) and the last in bit 31: the value is
+;     (word >> (32-n)), LSB first (for n = 32 the word IS the register).
+;
+; Everything else (request byte, parity, turnaround clocks, ACK, idle clocks, line reset) is built by the CPU out of
+; these two commands -- see tools/pio_swd.py.  A request is   wr(8, request)  rd(4) [turnaround + ACK]  then
+;   read:   rd(32) rd(1) [parity] rd(1) [turnaround]          write:  rd(1) [turnaround] wr(32) wr(1) [parity]
+; and a few idle clocks (wr(8, 0)).  The turnaround clocks are READ commands, so the host never drives SWDIO while the
+; target does.
+;
+; Timing (ticks are PIO clocks; one bit is 8 ticks: SWCLK 4 high / 4 low, idle LOW):
+;   * write: SWDIO changes at the tick SWCLK falls, 4 ticks before the rising edge (setup) and is held 4 ticks after
+;     it (hold).  SWDIO is not driven before the first data bit is on the pin.
+;   * read: SWDIO is sampled on the last tick before SWCLK rises (the target changes it after the previous rising
+;     edge, so the 2-clock input synchroniser never matters at CLKDIV >= 1).
+;   * every stall (empty TX FIFO at `pull`, full RX FIFO at `push`) happens with SWCLK low.
+.program swd
+.side_set 1
+
+.wrap_target
+cmd:
+    pull block           side 0        ; header
+    out x, 5             side 0        ; x = pulses - 1
+    out y, 1             side 0        ; y = 1 for a read
+    jmp !y wr            side 0
+
+; ---- read: release SWDIO, sample it just before every rising edge
+    set pindirs, 0       side 0        ; SWDIO is an input
+rbit:
+    nop                  side 0 [2]
+    in pins, 1           side 0        ; last tick before the rise
+    jmp x-- rbit         side 1 [3]    ; SWCLK high for 4 ticks
+    push block           side 0        ; the sampled word (stalls with SWCLK low when the RX FIFO is full)
+    jmp cmd              side 0
+
+; ---- write: drive SWDIO from the next word
+wr:
+    pull block           side 0        ; data
+    set pindirs, 1       side 0        ; SWDIO is an output (the first bit goes out on the next instruction)
+wbit:
+    out pins, 1          side 0 [3]    ; new bit while SWCLK is low: 4 ticks of setup
+    jmp x-- wbit         side 1 [3]    ; SWCLK high for 4 ticks, then the bit is held 4 more ticks
+    push block           side 0        ; falls through here, SWCLK low again: completion marker (the ISR is empty -> 0)
+.wrap
