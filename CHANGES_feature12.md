@@ -26,7 +26,8 @@ together. The merged suite was run in full: 48 of 48 pass, including all USB tes
   (write pointer, repeated START, read) is not possible without reloading in between.
 
 ## Not done
-Gate-level simulation of these tests; re-running CI with
+Gate-level simulation of these tests (still open: the feature 18 smoke test runs post-layout, but it does not touch the I2C paths or
+pads 8/9; see `CHANGES_feature18.md`); re-running CI with
 this feature (no RTL changed, so the layout should be identical).
 
 ## Addendum: CPU-driven slave demo

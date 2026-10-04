@@ -910,7 +910,9 @@ cells, same 3,605 hold buffers, same wirelength) because nothing needed repair a
 design-rule advisories, not failures: 44 max-slew violations (slow corner only), 258 max-fanout and 1 max-cap
 violations. The gate-level tests (12/12, 2,587 s) run the CPU and boot path plus one PIO smoke test
 (`test_pio_postlayout_echo_and_pulses`: FIFOs, shifter, ISA decode, IRQ flags, clock divider, pin muxing through the pads,
-see feature 18); the other PIO protocol programs and tests have only been simulated on RTL.
+see feature 18); the other PIO protocol programs and tests have only been simulated on RTL. That smoke test never executes `in`, `out`,
+`set pindirs`, side-set, pin-conditioned `jmp`/`wait`, `out exec`, autopush/autopull or the input synchronisers, and never owns pads 8/9
+(`uio_oe` is asserted constant), so the I2C-specific logic and its open-drain pads have no post-layout evidence yet (list in `CHANGES_feature18.md`).
 
 *TX* (`tx_start`): FIFO word 0 = number of bits - 1, then the packet's bits LSB first, 32 per word.
 The bits are the **logical, already bit-stuffed** bits including SYNC (`tools/pio_usb.py` builds
@@ -979,7 +981,7 @@ CLKDIV 1 an SCL period of 16 or 24 clocks is too fast (the master sees no ACK at
 is the first that works; use 40 or more. *No combined slave:* a real sensor or EEPROM (write the
 register pointer, repeated START, read) needs both directions in one device, but the two programs use
 29 + 32 words of a 32-word instruction memory shared by all state machines, so they can only be
-swapped at run time, not run together. *Not done:* a gate-level run of these tests (only the feature 18 smoke test runs on the post-layout netlist).
+swapped at run time, not run together. *Not done:* a gate-level run of these tests (only the feature 18 smoke test runs on the post-layout netlist, and it does not touch the paths or pads these programs use).
 
 **Limit: no bus-busy detection in `i2c_mm.pio`.** The program arbitrates bit by bit *after* a START and
 synchronises SCL with slower masters, but nothing in it checks that the bus is free *before* the START,
