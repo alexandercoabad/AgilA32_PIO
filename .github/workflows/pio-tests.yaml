@@ -1,7 +1,7 @@
 name: pio-tests
 # The PIO block's own tests: every standalone Icarus testbench (CPU-driven end-to-end benches included) and the
 # cocotb protocol suite (test/Makefile.proto). test.yaml only runs the top-level cocotb test (`make`); this one runs
-# `make standalone-tests`, which also runs Makefile.proto. Takes about 10 minutes (first run: 9 min), hence its own workflow.
+# `make standalone-tests`, which also runs Makefile.proto. Run time depends on the hosted runner machine (runs so far: 9 min, 4.5 min); allow 10 minutes or more, hence its own workflow.
 # The mutation sweeps (tools/*_mutation_sweep.py) are run only when this workflow is started by hand.
 on:
   push:
