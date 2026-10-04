@@ -473,8 +473,8 @@ The PIO testbenches need Icarus Verilog (`apt-get install iverilog`); the cocotb
 `.github/workflows/test.yaml` runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests` (the 31 Icarus
 testbenches and the 94 protocol tests) has its own workflow,
 `.github/workflows/pio-tests.yaml`, which runs on every push and fails on any `FAIL` log or `<failure` in `results.xml`; started by hand with
-`mutation_sweeps` ticked it also runs the four mutation sweeps. Its first run on GitHub (4 Oct 2026, push `5de56c9`)
-passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS, job time 9 min 1 s (9 min 4 s total).
+`mutation_sweeps` ticked it also runs the mutation sweeps (six: 1-Wire, VGA, WS2812 repeat, I2C slave, SWD, gate-level smoke test). Its first run on GitHub (4 Oct 2026, push `5de56c9`)
+passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS, job time 9 min 1 s (9 min 4 s total). The run after the SWD host was added (feature 19) passed 94/94 cocotb protocol tests (76 + 18 SWD), no failures or errors, and all 33 bench logs ending in PASS, in 4 min 28 s total (push `03013ea`, 4 min 25 s for the job; run time depends on the GitHub-hosted machine the job lands on and has varied between about 4 and 9 minutes).
 
 Mutation sweeps (each breaks a PIO program one line at a time on a temporary copy and checks that a test fails; `--list`
 shows the mutants): `tools/i2c_slave_mutation_sweep.py` (29), `tools/onewire_mutation_sweep.py` (23), `tools/vga_mutation_sweep.py` (23),

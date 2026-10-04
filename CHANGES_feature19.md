@@ -24,3 +24,6 @@ Request byte, parity, command words, DP / MEM-AP register addresses, CTRL/STAT b
 No CPU-driven demo through the top level (unlike JTAG / 1-Wire / VGA): the packet logic lives in the host code of the tests, and a
 CPU doing a whole SWD request is a few hundred instructions across several 44-byte pages. Not tried on a real target; no
 multi-drop (DLPIDR / TARGETSEL) and no SWD-to-dormant sequence; read-data parity errors are only reported to the host code.
+
+## CI
+First GitHub run of `pio-tests.yaml` with these tests (push `03013ea`, 4 min 28 s total): 94/94 cocotb protocol tests passed (76 `test_pio_protocols` + 18 `test_pio_swd`), 0 failures, 0 errors, 0 skipped; all 33 standalone bench logs end in PASS. The two new sweeps (`swd_mutation_sweep.py`, `gl_smoke_mutation_sweep.py`) are in the manual `mutation_sweeps` step and have not been timed on GitHub.
