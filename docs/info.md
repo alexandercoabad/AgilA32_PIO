@@ -431,7 +431,7 @@ directly -- don't hand-edit that file.
 *PIO block tests, CI and mutation sweeps.* Besides the suites below, the PIO block has 76 cocotb protocol tests, 16 PIO Verilog testbenches
 (12 of them CPU-driven end to end through the real top level) and five mutation sweeps (`tools/i2c_slave_mutation_sweep.py`,
 `onewire_mutation_sweep.py`, `vga_mutation_sweep.py`, `ws2812_repeat_mutation_sweep.py`, `gl_smoke_mutation_sweep.py` (16); 29 + 23 + 23 + 18 one-line mutants, all caught). `make standalone-tests` runs
-everything; `.github/workflows/pio-tests.yaml` does so on every push (written and run locally, not yet run on GitHub), while `test.yaml` runs only `make`.
+everything; `.github/workflows/pio-tests.yaml` does so on every push (first GitHub run on 4 Oct 2026, push `5de56c9`: 76/76 cocotb tests passed, every bench log ending in PASS, 9 min 4 s), while `test.yaml` runs only `make`.
 Everything above is simulation; none of the PIO protocols has been tried on real hardware or a real peer device.
 
 Nine test suites cover different parts of this design (see `test/`):
