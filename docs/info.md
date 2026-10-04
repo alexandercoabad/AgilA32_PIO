@@ -17,7 +17,7 @@ minimal, from-scratch RISC-V core is where this whole line of projects
 started.
 
 Structurally and feature-wise, though, this project is the direct
-successor to [AgilA8](https://github.com/alexandercoabad/AgilA8_IHP)
+successor to AgilA8 ([Sky130 original](https://github.com/alexandercoabad/AgilA8_microcontroller), [IHP port](https://github.com/alexandercoabad/AgilA8_IHP))
 -- my own earlier Tiny Tapeout project. Both are mine, and both belong
 to the same "AgilA" line: *Agila* is Tagalog/Filipino for "eagle," and
 the "A8" named that first core's 8-bit custom ISA. AgilA32 swaps that
@@ -408,6 +408,10 @@ key (`0x00`), several plain keys back-to-back (confirming the flags
 don't get stuck set), and a scancode past the safe-dispatch ceiling
 (confirming the bounds check above actually prevents the wraparound bug
 it exists for, not just untested code that happens to look right).
+
+### Portability
+
+The RTL is PDK-agnostic and uses no macros. `src/*.v` and `*.vh` are plain synthesizable Verilog: no standard cell, I/O cell or other library primitive is instantiated (every instantiated module is defined in `src/`), and the only conditional compilation is `` `ifndef SYNTHESIS `` around simulation-only code. AgilA32's CPU-only version was hardened on Sky130 and moved to IHP SG13 CMOS5L without an RTL change (see `MIGRATION_TO_IHP.md`); the PIO block was added afterwards and has been hardened on IHP only, so its portability rests on the RTL being generic, not on a second PDK run. `src/config.json` lists no macros or extra files, and all memories (PIO instruction memory, CPU register file, on-chip RAM) are Verilog arrays that synthesis maps to flip-flops, not SRAM macros. The price is area, which is why the PIO instruction memory has 32 words. Timing and area figures (24 MHz clock, 46.5 MHz post-layout limit, 6x4 tiles) are from the IHP run; another PDK needs its own flow run to confirm them.
 
 ## How to test
 

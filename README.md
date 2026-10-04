@@ -51,7 +51,7 @@ measured on silicon yet.
 ## Lineage: AgilA8 -> AgilA32
 
 Structurally and feature-wise, though, AgilA32 is the direct successor
-to [AgilA8](https://github.com/alexandercoabad/AgilA8_IHP) -- my own
+to AgilA8 ([Sky130 original](https://github.com/alexandercoabad/AgilA8_microcontroller), [IHP port](https://github.com/alexandercoabad/AgilA8_IHP)) -- my own
 earlier Tiny Tapeout project. Both are mine, and both belong to the
 same "AgilA" line: *Agila* is Tagalog/Filipino for "eagle," and the
 "A8" named that first core's 8-bit custom ISA. AgilA32 swaps that "A8"
@@ -79,7 +79,7 @@ be useful -- boot, memory-mapped I/O, external storage, peripherals --
 that carries AgilA8's design forward, widened from 8 bits to 32.
 
 - [Read the project datasheet](docs/info.md) — how it works, how to test it, pinout
-- [AgilA8, the 8-bit predecessor this project is built on](https://github.com/alexandercoabad/AgilA8_IHP)
+- [AgilA8, the 8-bit predecessor this project is built on](https://github.com/alexandercoabad/AgilA8_IHP) (IHP port); the original [AgilA8 on Sky130](https://github.com/alexandercoabad/AgilA8_microcontroller)
 - [Original Pineapple ONE project](https://pineapple-one.github.io/) (the origin-story inspiration)
 
 **Scope note:** the original design has a 500 kHz clock, 512 kB program
@@ -197,6 +197,11 @@ around. All four SPI modes are also run end to end from CPU firmware (`tb_pio_cp
 is done in simulation only, with a receive clock tolerance of just about -0.5 % to +0.8 %; 10BASE-T
 (the other stretch goal) is not attempted (it needs a frame buffer, at least 40 MHz and external
 magnetics), and nothing has been measured on silicon yet.
+
+## Portability: PDK-agnostic RTL, no macros
+- **No PDK dependency in the RTL.** `src/*.v` and `*.vh` are plain synthesizable Verilog. No standard cell, I/O cell or other library primitive is instantiated (every instantiated module is defined in `src/`), and the only conditional compilation is `` `ifndef SYNTHESIS `` around simulation-only code. AgilA32's CPU-only version was hardened on Sky130 (previous target) and moved to IHP SG13 CMOS5L (current target) without an RTL change; only the flow files differ (`MIGRATION_TO_IHP.md`). The PIO block was added after that move and has been hardened on IHP only, so its portability rests on the RTL being generic, not on a second PDK run. (The 8-bit predecessor, [AgilA8 on Sky130](https://github.com/alexandercoabad/AgilA8_microcontroller), is a separate design tuned to Sky130; this claim is about AgilA32.)
+- **No macros, no hard IP.** `src/config.json` lists no macros or extra files. All memories (the 16-bit PIO instruction memory, the CPU register file, the 48 B on-chip RAM) are Verilog arrays that synthesis turns into flip-flops, not SRAM macros. The trade-off is area: flip-flop memory is larger than SRAM, which is why the PIO instruction memory is only 32 words. In return, any open flow and PDK can build the design unchanged.
+- **What is not portable.** The timing and area figures (24 MHz clock with a 46.5 MHz post-layout limit in the slow corner, 6x4 tiles, 12/12 gate-level tests) come from the IHP run. A different PDK needs its own flow run to confirm them.
 
 ## Layout
 
