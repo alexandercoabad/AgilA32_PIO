@@ -337,7 +337,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `test/tb_spi_periph.v`) -- all in `make standalone-tests` (run in CI by `.github/workflows/pio-tests.yaml`;
       `test.yaml` itself runs `make` only); all 12 on-chip cocotb tests + all 31 standalone tests (15 CPU and
       peripheral, 16 PIO) + the 76 PIO protocol cocotb tests currently
-      passing in simulation (the new workflow has not run on GitHub yet)
+      passing in simulation (the workflow's first GitHub run on 4 Oct 2026 passed, 9 min 4 s)
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
       screen. The first plan -- interleave the polled PS/2 reader and the

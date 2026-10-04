@@ -27,7 +27,7 @@ and **not tried on a real strip**.
 `.github/workflows/pio-tests.yaml` (new): on every push runs `make standalone-tests` (all standalone benches + `Makefile.proto`)
 and fails on any `FAIL` log or `<failure` in `results.xml`. Started by hand with `mutation_sweeps` ticked it also runs the four mutation
 sweeps (about 1 hour more). Before this, `test.yaml` only ran the top-level cocotb test (`make`), not the PIO benches.
-Tested here with cocotb 2.1.0 and Icarus 12.0; the workflow itself has not run on GitHub yet.
+Tested here with cocotb 2.1.0 and Icarus 12.0; the workflow's first run on GitHub (4 Oct 2026) passed: 76/76 cocotb tests, all bench logs PASS, 9 min 4 s.
 
 ## Limits
 Repeat program: borders not checked against a real strip; one colour per command (no gradient); count is 32-bit but a frame must
