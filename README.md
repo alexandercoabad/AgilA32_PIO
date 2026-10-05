@@ -178,7 +178,7 @@ unchanged.
   building it, three WAIT encodings in the supplied testbench turned out to
   have the wrong source field; they are fixed and documented in
   `CHANGES_feature6.md`.
-- Gate-level tests run on the hardened netlist in CI (12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job).
+- Gate-level tests run on the hardened netlist in CI (12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job). Feature 20 adds a second post-layout test, the PIO signature test `test_pio_postlayout_signature`; it has passed on RTL and on a Yosys-synthesized netlist, but its run on the real post-layout netlist has not been done yet, so no gate-level number for it is recorded here (expect the `gl_test` job to take roughly 1.9 times the smoke test's share longer).
 
 **7. Designed for the synthesis flow, not just for simulation.** The first
 CI synthesis of the PIO block stalled in Yosys' SAT-based `share` pass on the
@@ -403,6 +403,7 @@ tools/
   build_ps2_reader.py      PS/2 keyboard reader, Step 1: raw scancode -> GPIO_OUT
   build_ps2_ascii.py       PS/2 keyboard reader, Step 2: scancode -> ASCII translation
   gl_echo.pio / gl_pulses.pio   (in pio/) programs of the post-layout smoke test, built by tools/build_pio_gl_smoke.py
+  gl_sig0.pio / gl_sig1.pio     (in pio/) programs of the post-layout signature test, built by tools/build_pio_gl_sig.py
   pioasm.py, pio_host.py, pio_i2c.py, build_pio_uart.py, build_pio_i2c.py, build_pio_multi.py, build_pio_spi4.py, build_pio_jtag.py, build_pio_onewire.py, build_pio_vga.py   PIO assembler/disassembler, flash-image host library, UART demo
   build_pio_ps2_rx.py, build_pio_usb.py, build_pio_ws2812.py, build_pio_ws2812_repeat.py, build_pio_i2c_slave.py   more CPU-driven PIO flash images (each is paired with a tb_pio_cpu_*.v)
   pio_i2c.py, pio_i2c_mm.py, pio_i2c_slave.py, pio_usb.py   host-side helpers / transaction models used by the cocotb tests
@@ -412,13 +413,15 @@ tools/
   pio_swd.py                    SWD packet helpers (request byte, parity, command words, register addresses) for the tests and firmware
   vga_mutation_sweep.py         same for the two VGA programs (23 mutants)
   gl_smoke_mutation_sweep.py   same for the post-layout smoke test (16 mutants of the two programs and pio_sm.v)
+  gl_sig_mutation_sweep.py     same for the post-layout signature test (40 mutants of the two programs, pio_sm.v and pio.v; 38 caught, 2 listed as survivors)
   ws2812_repeat_mutation_sweep.py   same for the WS2812 repeat-colour program (18 mutants)
-  mutation_common.py            shared engine of the three mutation sweeps
+  mutation_common.py            shared engine of the mutation sweeps
   sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
   test_pio_gl.py          cocotb post-layout smoke test (also runs in the gate-level CI job): PIO echo + pulse programs through the pads; image `pio_gl_smoke_flash_image.hex`
+  test_pio_gl_sig.py      cocotb post-layout signature test (feature 20): in / out / mov / jmp / wait forms, side-set PINDIRS, autopush/autopull, input synchroniser and the open-drain pads 8/9, compared with golden values; image `pio_gl_sig_flash_image.hex`
   tb_check.v              standalone: same three scenarios as a single self-contained Icarus testbench
   tb_qspi_engine.v        standalone: QSPI engine bit-level protocol + byte-order check
   spi_ram_model.v         behavioral single-line SPI RAM model (flash CS0 and PSRAM CS1), for the tests below
@@ -457,7 +460,7 @@ external flash are in [docs/info.md](docs/info.md).
 ```
 cd test
 pip install -r requirements.txt
-make                    # cocotb: self-test, demo counter, full bootload-and-run, PIO post-layout smoke test (test_pio_gl.py)
+make                    # cocotb: self-test, demo counter, full bootload-and-run, PIO post-layout smoke and signature tests (test_pio_gl.py, test_pio_gl_sig.py)
 make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, external-window, full-CPU,
                          # self-test/bootload, FLASH_MODE handoff, FLASH_PAGE bank-switching, ST7789 driver,
                          # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO
@@ -473,7 +476,7 @@ The PIO testbenches need Icarus Verilog (`apt-get install iverilog`); the cocotb
 `.github/workflows/test.yaml` runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests` (the 31 Icarus
 testbenches and the 94 protocol tests) has its own workflow,
 `.github/workflows/pio-tests.yaml`, which runs on every push and fails on any `FAIL` log or `<failure` in `results.xml`; started by hand with
-`mutation_sweeps` ticked it also runs the mutation sweeps (six: 1-Wire, VGA, WS2812 repeat, I2C slave, SWD, gate-level smoke test). Its first run on GitHub (4 Oct 2026, push `5de56c9`)
+`mutation_sweeps` ticked it also runs the mutation sweeps (seven: 1-Wire, VGA, WS2812 repeat, I2C slave, SWD, gate-level smoke test, gate-level signature test). Its first run on GitHub (4 Oct 2026, push `5de56c9`)
 passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS, job time 9 min 1 s (9 min 4 s total). The run after the SWD host was added (feature 19) passed 94/94 cocotb protocol tests (76 + 18 SWD), no failures or errors, and all 33 bench logs ending in PASS, in 4 min 28 s total (push `03013ea`, 4 min 25 s for the job; run time depends on the GitHub-hosted machine the job lands on and has varied between about 4 and 9 minutes).
 
 Mutation sweeps (each breaks a PIO program one line at a time on a temporary copy and checks that a test fails; `--list`

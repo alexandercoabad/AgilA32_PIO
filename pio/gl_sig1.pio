@@ -1,0 +1,23 @@
+; Post-layout signature test, state machine B (14 words at origin 17).  Drives the two open-drain pads (pins 8 and 9) with
+; side-set PINDIRS, reads them back through the input synchroniser (pin 8 bypassed, pin 9 synchronised), and moves data
+; through autopull (threshold 16) and autopush (threshold 8).
+; Config: SIDESET_BASE 8, SIDESET_COUNT 3 (optional), SIDE_PINDIR on, IN_BASE 8, IN left, OUT right,
+;         AUTOPUSH 8, AUTOPULL 16, CLKDIV 2.5, SYNC_BYP = pin 8.
+.program gl_sig1
+.side_set 2 opt pindirs
+.wrap_target
+    wait 1 irq 0            ; 0   waits for state machine A (and clears flag 0)
+    out x, 8                ; 1   autopull: x = 0xC3
+    out y, 8                ; 2   y = 0x5A
+    nop side 1 [3]          ; 3   pad 8 pulled low, pad 9 released
+    in pins, 2              ; 4   {pad9, pad8} = 0b10
+    nop side 2 [3]          ; 5   pad 9 pulled low, pad 8 released
+    in pins, 2              ; 6   0b01
+    nop side 3 [3]          ; 7   both pulled low
+    in pins, 2              ; 8   0b00
+    nop side 0 [3]          ; 9   both released
+    in pins, 2              ; 10  0b11 -> autopush of 0x93
+    in x, 8                 ; 11  autopush 0xC3
+    in y, 8                 ; 12  autopush 0x5A
+    irq set 0 rel           ; 13  flag 1 stays set
+.wrap

@@ -1,0 +1,29 @@
+; Post-layout signature test, state machine A (17 words at origin 0).  It runs a fixed instruction mix and shows every
+; intermediate result on uo_out[7:0] (PIN_OWN covers pins 0-9), so the test reads the answers straight off the pads.
+; Forms covered: set pins/x, mov pins/y/osr with ~ and ::, in pins/x (left shift), out pins/y (left shift), pull,
+; out exec, irq set rel, push, wait irq, jmp x-- (loop) and, through eight host-supplied "exec" words (two
+; instructions each, see tools/build_pio_gl_sig.py): mov pins ~y / isr / status / y, set pins, in y, jmp x!=y,
+; jmp !x, jmp pin, jmp y--, wait gpio, wait pin.
+; Config: OUT_BASE 0 / COUNT 8, SET_BASE 0 / COUNT 5, IN_BASE 2, JMP_PIN 6, STATUS = RX level < 1, shifts: IN left,
+; OUT left, CLKDIV 1.
+.program gl_sig0
+.wrap_target
+    set pins, 21            ; 0   uo_out = 0x15 (only pins 0-4 change)
+    set x, 19               ; 1
+    mov pins, ~x            ; 2   0xEC
+    in pins, 8              ; 3   pins 2..9 -> isr = 0xDA
+    in x, 5                 ; 4   isr = 0x1B53
+    irq set 0 rel           ; 5   flag 0: releases state machine B
+    mov osr, ::isr          ; 6   0xCAD80000 (bit reverse)
+    out pins, 8             ; 7   top byte 0xCA
+    out y, 8                ; 8   y = 0xD8
+    mov pins, y             ; 9   0xD8
+    set x, 7                ; 10  eight trips round the loop
+loop:
+    pull block              ; 11  one exec word (two instructions) per trip
+    out exec, 16            ; 12
+    out exec, 16            ; 13
+    jmp x-- loop            ; 14
+    push                    ; 15  isr -> RX FIFO 0
+    wait 1 irq 7            ; 16  park here (flag 7 is never raised)
+.wrap
