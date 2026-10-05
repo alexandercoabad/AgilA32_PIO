@@ -54,6 +54,7 @@ jobs:
           python3 tools/i2c_slave_mutation_sweep.py
           python3 tools/swd_mutation_sweep.py
           python3 tools/gl_smoke_mutation_sweep.py
+          python3 tools/gl_sig_mutation_sweep.py
 
       - name: Upload logs
         if: success() || failure()
