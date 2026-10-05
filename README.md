@@ -178,7 +178,7 @@ unchanged.
   building it, three WAIT encodings in the supplied testbench turned out to
   have the wrong source field; they are fixed and documented in
   `CHANGES_feature6.md`.
-- Gate-level tests run on the hardened netlist in CI (12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job). Feature 20 adds a second post-layout test, the PIO signature test `test_pio_postlayout_signature`; it has passed on RTL and on a Yosys-synthesized netlist, but its run on the real post-layout netlist has not been done yet, so no gate-level number for it is recorded here (expect the `gl_test` job to take roughly 1.9 times the smoke test's share longer).
+- Gate-level tests run on the hardened netlist in CI (first run: 12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job). Feature 20 adds a second post-layout test, the PIO signature test `test_pio_postlayout_signature`. In the gds run of 5-6 Oct 2026 (push `79f0997`, run #65) the gate-level job passed **13/13** on the placed netlist, signature test included: the signature test took 7,564 s (4.40 million simulated clocks) and the smoke test 3,444 s in that run; the `gl_test` job took 3 h 11 min and the whole `gds` workflow 5 h 52 min (`gds` 2 h 40 min, `gl_test` 3 h 11 min, precheck 8 min; the total is about `gds` plus `gl_test`, so precheck overlaps). That is inside GitHub's 360-minute limit per job, but it is a long wait for every push; run times also vary with the hosted machine.
 
 **7. Designed for the synthesis flow, not just for simulation.** The first
 CI synthesis of the PIO block stalled in Yosys' SAT-based `share` pass on the
@@ -315,7 +315,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       fill/tap), clean lint, precheck 10/10 and gate-level tests 11/11
       (CI run #11, ~2h28m for the `gds` job -- expect a long build);
       with the feature 18 PIO smoke test added, gate-level tests 12/12
-      (2,587 s, `gl_test` about 50 min instead of about 6)
+      (2,587 s, `gl_test` about 50 min instead of about 6); with the feature 20 signature test, gate-level tests 13/13 (`gl_test` 3 h 11 min)
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
