@@ -1,6 +1,7 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
 # AgilA32 — a from-scratch RV32I CPU for Tiny Tapeout (IHP SG13CMOS5L shuttle)
+## Developed by Alexander Co Abad with the help of Claude AI (Sonnet 5.5)
 
 > **In one line:** a from-scratch RV32I CPU with RP2040-compatible PIO state
 > machines on the same die, so the CPU can load, *and later replace*, the
