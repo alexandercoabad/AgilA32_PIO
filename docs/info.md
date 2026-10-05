@@ -9,11 +9,11 @@ You can also include images in this folder and reference them in the markdown. E
 
 ## How it works
 
-This is a minimal, from-scratch 32-bit RISC-V (RV32I) CPU. Originally
+This is a minimal 32-bit RISC-V (RV32I) CPU written for this project. The CPU is written for this project, not derived from an existing open-source core; it follows the public RV32I specification, and the PIO follows the public RP2040 datasheet. It was developed by Alexander Co Abad with the help of Claude AI (Sonnet 5.5). Originally
 inspired by [Pineapple ONE](https://pineapple-one.github.io/) -- a
 RISC-V computer built entirely out of discrete 7400-series logic chips
 (no FPGA, no microcontroller) -- the "just basic logic" idea of a
-minimal, from-scratch RISC-V core is where this whole line of projects
+minimal RISC-V core is where this whole line of projects
 started.
 
 Structurally and feature-wise, though, this project is the direct

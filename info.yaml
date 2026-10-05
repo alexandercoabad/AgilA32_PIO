@@ -3,7 +3,7 @@ project:
   title:        "AgilA32"      # Project title
   author:       "Alexander Co Abad"      # Your name
   discord:      "alexandercoabad_25756"      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "A from-scratch RV32I CPU plus RP2040-compatible PIO state machines: firmware-programmable protocol emulator (UART/SPI/... loaded after fabrication)."
+  description:  "An RV32I CPU written for this project plus RP2040-compatible PIO state machines: firmware-programmable protocol emulator (UART/SPI/... loaded after fabrication)."
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     24000000      # 24 MHz -- 2x the 12 MHz PIO tick low-speed USB needs; matches CLOCK_PERIOD in src/config.json (41.667 ns). Post-layout limit is 46.5 MHz (slow corner); confirmed by a GDS run at this 24 MHz period (setup slack +20.2 ns).
 

@@ -1,17 +1,20 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
 
-# AgilA32 — a from-scratch RV32I CPU for Tiny Tapeout (IHP SG13CMOS5L shuttle)
-## Developed by Alexander Co Abad with the help of Claude AI (Sonnet 5.5)
+# AgilA32 — an RV32I CPU with RP2040-compatible PIO for Tiny Tapeout (IHP SG13CMOS5L shuttle)
 
-> **In one line:** a from-scratch RV32I CPU with RP2040-compatible PIO state
-> machines on the same die, so the CPU can load, *and later replace*, the
-> protocol engines at run time -- and can then halt itself while the PIO
+> **In one line:** an RV32I CPU written for this project, with RP2040-compatible
+> PIO state machines on the same die, so the CPU can load, *and later replace*,
+> the protocol engines at run time -- and can then halt itself while the PIO
 > keeps running the protocol on its own.
+>
+> **Originality:** The CPU is written for this project, not derived from an existing open-source core; it follows the public RV32I specification, and the PIO follows the public RP2040 datasheet.
+>
+> Developed by Alexander Co Abad with the help of Claude AI (Sonnet 5.5).
 
 Originally inspired by [Pineapple ONE](https://pineapple-one.github.io/),
 a RISC-V CPU built entirely out of discrete 7400-series logic chips (no
-FPGA, no microcontroller) -- the "just basic logic" idea of a minimal,
-from-scratch RISC-V core is where this whole line of projects started.
+FPGA, no microcontroller) -- the "just basic logic" idea of a minimal
+RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
@@ -102,7 +105,7 @@ and to say what the architecture makes possible beyond the RP2040's PIO.
 Here is what this design does, with the test that backs each claim.
 
 **1. The programmer lives on the die.** RP2040 PIO is driven by an external
-Cortex-M0+. Here a from-scratch RV32I core drives the PIO over a two-byte
+Cortex-M0+. Here an RV32I core written for this project drives the PIO over a two-byte
 window (`PIO_IDX`/`PIO_DATA`, with auto-increment) squeezed into an 8-bit
 address space. No host microcontroller is needed: a flash image or the GPIO
 bootloader is enough to bring the whole system up.
