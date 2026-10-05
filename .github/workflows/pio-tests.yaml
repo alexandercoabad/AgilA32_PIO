@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mutation_sweeps:
-        description: "Also run the mutation sweeps (adds about 1 hour 10 minutes)"
+        description: "Also run the mutation sweeps (adds about 1 hour 20 minutes)"
         type: boolean
         default: false
 
