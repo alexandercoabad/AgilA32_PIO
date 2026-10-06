@@ -106,3 +106,18 @@ scratch run of mine was interrupted mid-mutation and left a mutated file behind;
 against the mutated state. The tool now compares against the repository's files, and that run was discarded.)
 Re-verified on this revision: full suite 71/71; the three formerly weak mutants (R15, R11, T1) are caught.
 
+## Addendum: what a short write costs (limitation pinned by a test; 94 -> 95 tests, all pass)
+The write slave counts `WRITE_BYTES` and cannot see a STOP while waiting for a data bit, which the docs already said "puts it out of
+step". `test_i2c_slave_rx_short_write_corrupts_only_the_next_transaction` shows what that means (N = 2; the master writes 1 byte and
+STOPs, then two full writes):
+
+| | short write | next full write | the one after |
+|---|---|---|---|
+| master sees | ACK, ACK | **NAK, NAK, NAK** | ACK, ACK, ACK |
+| RX FIFO gets | `0x11` | **`0x42`** (bogus) | `0x44`, `0x55` |
+
+The next transaction is lost and one bogus byte is left in the FIFO; the slave then recovers on its own. One scenario (SCL period 64),
+not a sweep. The test documents a limitation, not desired behaviour: if a future program makes writes variable-length it should start
+to fail, and the "bounded write" notes in `docs/info.md` should be updated with it. The slave mutation sweep (13 tests now) still catches
+the byte-count mutants (R3, R4 re-run).
+

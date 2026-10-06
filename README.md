@@ -18,7 +18,7 @@ RISC-V core is where this whole line of projects started.
 
 ## Protocol coverage
 
-**Test counts** (all run by `make standalone-tests` in `test/`, and on every push by `.github/workflows/pio-tests.yaml`): **94 cocotb protocol tests**
+**Test counts** (all run by `make standalone-tests` in `test/`, and on every push by `.github/workflows/pio-tests.yaml`): **95 cocotb protocol tests**
 (`test/test_pio_protocols.py`, via `Makefile.proto`) **plus 16 PIO Verilog
 testbenches**: 12 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
 `tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`, `tb_pio_cpu_ws2812_repeat.v`, `tb_pio_cpu_onewire.v`, `tb_pio_cpu_vga.v`) and 4 that
@@ -158,7 +158,7 @@ is identical to the pre-PIO chip and every earlier test still passes
 unchanged.
 
 **6. Verification against protocol peers, not just waveforms.**
-- 94 cocotb protocol tests (76 in `test/test_pio_protocols.py` + 18 SWD in `test/test_pio_swd.py`, `make -f
+- 95 cocotb protocol tests (77 in `test/test_pio_protocols.py` + 18 SWD in `test/test_pio_swd.py`, `make -f
   Makefile.proto`) drive `pio.v` over the same bus the CPU uses, against
   cycle-accurate peer models (`test/pio_tb_lib.py`): UART TX at integer,
   fractional and averaged dividers, UART RX including framing error and baud
@@ -330,7 +330,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       ASIC competition (6x4 tiles).
 - [x] Test suites (see "Testing locally" below): on-chip
       cocotb regression (self-test, demo counter, full bootload-and-run),
-      94 cocotb PIO protocol tests, and 31 standalone Icarus testbenches
+      95 cocotb PIO protocol tests, and 31 standalone Icarus testbenches
       (15 CPU and peripheral, listed next, plus the 16 PIO ones from the
       protocol table above) -- QSPI engine
       bit-level protocol, external-window integration via direct bus
@@ -346,7 +346,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `test/tb_boot_timeout.v`, `test/tb_qspi_clkdiv.v`,
       `test/tb_spi_periph.v`) -- all in `make standalone-tests` (run in CI by `.github/workflows/pio-tests.yaml`;
       `test.yaml` itself runs `make` only); all 12 on-chip cocotb tests + all 31 standalone tests (15 CPU and
-      peripheral, 16 PIO) + the 94 PIO protocol cocotb tests currently
+      peripheral, 16 PIO) + the 95 PIO protocol cocotb tests currently
       passing in simulation (the workflow's first GitHub run on 4 Oct 2026 passed, 9 min 4 s)
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
@@ -469,7 +469,7 @@ make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, ex
                          # self-test/bootload, FLASH_MODE handoff, FLASH_PAGE bank-switching, ST7789 driver,
                          # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO
                          # testbenches (pio.v level and CPU-driven, incl. 1-Wire and VGA), and at the
-                         # end the 94 cocotb PIO protocol tests (Makefile.proto)
+                         # end the 95 cocotb PIO protocol tests (Makefile.proto)
 make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom   # one protocol test (the longest,
                          # test_onewire_clock_tolerance, takes about 80 s)
 ```
@@ -478,7 +478,7 @@ The PIO testbenches need Icarus Verilog (`apt-get install iverilog`); the cocotb
 `pip install -r requirements.txt`.
 
 `.github/workflows/test.yaml` runs only `make` (the on-chip cocotb tests) on every push. `make standalone-tests` (the 31 Icarus
-testbenches and the 94 protocol tests) has its own workflow,
+testbenches and the 95 protocol tests) has its own workflow,
 `.github/workflows/pio-tests.yaml`, which runs on every push and fails on any `FAIL` log or `<failure` in `results.xml`; started by hand with
 `mutation_sweeps` ticked it also runs the mutation sweeps (seven: 1-Wire, VGA, WS2812 repeat, I2C slave, SWD, gate-level smoke test, gate-level signature test). Its first run on GitHub (4 Oct 2026, push `5de56c9`)
 passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS, job time 9 min 1 s (9 min 4 s total). The run after the SWD host was added (feature 19) passed 94/94 cocotb protocol tests (76 + 18 SWD), no failures or errors, and all 33 bench logs ending in PASS, in 4 min 28 s total (push `03013ea`, 4 min 25 s for the job; run time depends on the GitHub-hosted machine the job lands on and has varied between about 4 and 9 minutes).

@@ -1914,3 +1914,25 @@ async def test_ws2812_repeat_rgbw_and_latch_between_frames(dut):
     assert len(strip.frames) == 2, len(strip.frames)
     assert Ws2812Strip.pixels(strip.frames[0], nbits=32) == [a[1]] * a[0]
     assert Ws2812Strip.pixels(strip.frames[1], nbits=32) == [b[1]] * b[0]
+
+
+@cocotb.test()
+async def test_i2c_slave_rx_short_write_corrupts_only_the_next_transaction(dut):
+    """DOCUMENTS A LIMITATION (not desired behaviour).  The write slave counts WRITE_BYTES (here 2); while it waits
+    for a data bit it cannot see a STOP.  So a master that writes only ONE byte and stops leaves it waiting, and the
+    next transaction's address byte is consumed as that second data byte.  Observed, and pinned here:
+      * the short write itself is fine (ACK ACK, byte 0x11 delivered);
+      * the NEXT full write is NAKed from its address on (NAK NAK NAK) and a bogus byte (0x42, the previous
+        transaction's address bits misread as data) reaches the RX FIFO;
+      * the slave then recovers by itself: the write after that goes through (ACK x3, 0x44 0x55).
+    If a future program makes writes variable-length this test should start to FAIL -- that is the point; update it
+    together with the 'bounded write' notes in docs/info.md."""
+    m = I2cMaster([("start",), ("write", 0x84), ("write", 0x11), ("stop",),              # short: 1 of 2 bytes
+                   ("start",), ("write", 0x84), ("write", 0x22), ("write", 0x33), ("stop",),   # victim
+                   ("start",), ("write", 0x84), ("write", 0x44), ("write", 0x55), ("stop",)])  # recovered
+    bus, world = await slave_setup(dut, I2cSlaveRx(0x42, write_bytes=2), m)
+    got = await drain_rx(bus, 5, m, extra=8000)
+    assert m.acks == [0, 0, 1, 1, 1, 0, 0, 0], "short write ACKed; victim fully NAKed; recovery ACKed: %s" % m.acks
+    assert got[0] == 0x11 and got[-2:] == [0x44, 0x55], [hex(g) for g in got]
+    assert len(got) == 4 and got[1] not in (0x22, 0x33), \
+        "exactly one bogus byte between the good ones (the victim's data never arrives): %s" % [hex(g) for g in got]

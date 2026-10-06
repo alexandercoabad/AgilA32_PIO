@@ -432,7 +432,7 @@ gets bootloaded into it), edit `tools/build_boot_rom.py` and re-run it
 to regenerate `src/boot_rom_body.vh`, which `src/mem.v` `` `include``s
 directly -- don't hand-edit that file.
 
-*PIO block tests, CI and mutation sweeps.* Besides the suites below, the PIO block has 94 cocotb protocol tests, 16 PIO Verilog testbenches
+*PIO block tests, CI and mutation sweeps.* Besides the suites below, the PIO block has 95 cocotb protocol tests, 16 PIO Verilog testbenches
 (12 of them CPU-driven end to end through the real top level) and five mutation sweeps (`tools/i2c_slave_mutation_sweep.py`,
 `onewire_mutation_sweep.py`, `vga_mutation_sweep.py`, `ws2812_repeat_mutation_sweep.py`, `gl_smoke_mutation_sweep.py` (16), `gl_sig_mutation_sweep.py` (40); 29 + 23 + 23 + 18 one-line mutants, all caught; the signature sweep catches 38 of 40, see its test paragraph). `make standalone-tests` runs
 everything; `.github/workflows/pio-tests.yaml` does so on every push (first GitHub run on 4 Oct 2026, push `5de56c9`: 76/76 cocotb tests passed, every bench log ending in PASS, 9 min 4 s), while `test.yaml` runs only `make`.
@@ -963,7 +963,11 @@ low). Host-side helpers: `tools/pio_i2c_slave.py`, `tools/pio_i2c_mm.py`.
   FIFO (mask the word with 0xFF). A read request or another address is not ACKed. **Bounded on
   purpose**: while waiting for a data bit a PIO state machine cannot notice a STOP/START (there is no
   asynchronous branch), so a master that ends a write early would leave it out of step; fixing the
-  length at assembly time avoids that. The OSR is used as a hardware bit counter.
+  length at assembly time avoids that. **Measured cost of a short write** (N = 2, master sends 1 byte then STOP;
+  `test_i2c_slave_rx_short_write_corrupts_only_the_next_transaction`): the short write itself is ACKed and delivered, the
+  NEXT transaction is NAKed from its address on and one bogus byte (the previous address bits misread as
+  data, `0x42` in the test) reaches the RX FIFO, and the slave then recovers by itself for the transaction after that. One
+  scenario at SCL period 64, not a sweep. The OSR is used as a hardware bit counter.
 - **`pio/i2c_slave_tx.pio` (32 words), master reads from us.** Address match, ACK, then bytes from
   the TX FIFO until the master NAKs. If the FIFO is empty when a byte is due, the state machine **holds
   SCL low** (side-set on the blocking `pull`) until the host supplies it: clock stretching with the CPU
@@ -1016,7 +1020,7 @@ that START at the same moment is exactly what arbitration is for, and that is te
 stuck slave never becomes free: the host needs a timeout and a recovery (nine SCL pulses), neither of which
 exists here.
 
-**Tests** (`test_pio_protocols.py`; 76 in all as of feature 17): 14 multi-master (5 arbitration/clock-sync, 5 more, 4 bus-busy), 12 slave (including `test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table). Models: `I2cMaster`, `I2cMM`,
+**Tests** (`test_pio_protocols.py`; 77 in all with the short-write test): 14 multi-master (5 arbitration/clock-sync, 5 more, 4 bus-busy), 13 slave (including `test_i2c_slave_scl_speed_limits`, which logs the SCL-speed table). Models: `I2cMaster`, `I2cMM`,
 `I2cSlaveRx`, `I2cSlaveTx` in `pio_tb_lib.py` / the helper modules.
 
 **CPU-driven slave demo.** `tools/build_pio_i2c_slave.py` + `test/tb_pio_cpu_i2c_slave.v`, one flash
