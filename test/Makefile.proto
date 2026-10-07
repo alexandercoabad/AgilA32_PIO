@@ -7,6 +7,6 @@ SRC_DIR = $(PWD)/../src
 VERILOG_SOURCES = $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v
 COMPILE_ARGS += -I$(SRC_DIR)
 TOPLEVEL = pio
-COCOTB_TEST_MODULES = test_pio_protocols,test_pio_swd
+COCOTB_TEST_MODULES = test_pio_protocols,test_pio_swd,test_pio_can
 SIM_BUILD = sim_build/proto
 include $(shell cocotb-config --makefiles)/Makefile.sim

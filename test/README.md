@@ -200,10 +200,10 @@ limitation" note.
 
 ### PIO block tests
 
-- `make -f Makefile.proto` -- 94 cocotb tests (`test_pio_protocols.py` 76 + `test_pio_swd.py` 18, models in `pio_tb_lib.py`) drive `pio.v` alone over the CPU's bus:
-  UART, SPI modes 0-3, I2C master / slave / multi-master, PS/2, JTAG, low-speed USB, WS2812 (plain and repeat-colour), 1-Wire.
+- `make -f Makefile.proto` -- 120 cocotb tests (`test_pio_protocols.py` 77 + `test_pio_swd.py` 18 + `test_pio_can.py` 25, models in `pio_tb_lib.py` and `pio_can_lib.py`) drive `pio.v` alone over the CPU's bus:
+  UART, SPI modes 0-3, I2C master / slave / multi-master, PS/2, JTAG, low-speed USB, WS2812 (plain and repeat-colour), 1-Wire, SWD, CAN.
   One test: `make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom` (an exact name or one regex; `(a|b)` does not work).
-- `tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio_vga.v` -- Verilog benches on `pio.v` alone; `tb_pio_cpu_*.v` (12) -- the real core
+- `tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio_vga.v` -- Verilog benches on `pio.v` alone; `tb_pio_cpu_*.v` (13, the last one `tb_pio_cpu_can.v`: CAN frame sent and two captures read back) -- the real core
   bootloads a flash image from `tools/build_pio_*.py`, programs the PIO, halts, and a pin-level model checks the waveform.
 - Variants of one bench by plusarg: `tb_pio_cpu_ws2812.v` with `+img=pio_ws2812_rgbw_flash_image.hex +bits=32` (SK6812 RGBW) or
   `+img=pio_ws2812_reset280_flash_image.hex +reset_us=280` (280 us reset); `make standalone-tests` runs all three.

@@ -1,0 +1,37 @@
+; CAN raw bit capture: hard-synchronises on the SOF edge, samples RXD at 75 % of every bit time and shifts the samples
+; into the RX FIFO until the bus has been recessive for 11 bits in a row (ACK delimiter + EOF + intermission, or an
+; idle bus).  It does no destuffing and no CRC (no XOR in PIO): tools/can_frame.py decodes the capture on the CPU.
+; Original program; it sees every frame on the bus, including the ones the TX state machine sends itself.
+;
+; Pins (PIO pin numbers):  RXD = pin 1 (ui_in[1]).   Config: IN_BASE=1, JMP_PIN=1, autopush ON with threshold 32,
+;         IN shift RIGHT (LSB first), no side-set.  The program is entered at its LAST instruction (`mov x, ~null`),
+;         so x is initialised before the first frame; after a stop the host also forces `mov isr, null`.
+;
+; Output per frame, in this order:
+;   * the samples, 32 per word, first sample in bit 0 (autopush);
+;   * one partial word: the last S mod 32 samples, the first of them in bit 32-m (m = S mod 32), bits below are 0
+;     (it is pushed even when m = 0, then it is 0);
+;   * a tag word 0xFFFFFFFF - (S-1)  (upper 24 bits are all ones, which no data word can have because a data word never
+;     holds more than 11 recessive samples at its end and the bus stream has no 24 recessive samples before the end).
+;   S = number of samples taken including the 11th recessive one; the frame ends in the last 11 samples (all 1s).
+;
+; Timing: 16 PIO ticks per bit like pio/can_tx.pio; the first sample is taken 10 ticks after the SOF edge was seen by
+; the state machine (about 12 ticks = 75 % after the edge, the synchroniser takes 2).  There is no resynchronisation
+; after SOF: the clocks of the nodes must agree to about 0.2 % (measured over a 133 bit frame: a node up to 0.19 % faster or 0.47 % slower is still captured correctly).  The host has to empty the RX FIFO while a long frame
+; is being captured (up to 7 words): a stall at a full FIFO delays the samples.
+.program can_rx
+.wrap_target
+    wait 0 pin 0         [9]       ; SOF (falling edge on RXD)
+rbit:
+    in pins, 1                     ; t0  sample (autopush every 32)
+    jmp pin rec                    ; t1
+    set y, 10                      ; t2  dominant: 11 recessive bits to go again
+back:
+    jmp x-- rbit         [12]      ; t3  count the sample; always taken (x starts at 0xFFFFFFFF)
+rec:
+    jmp y-- back                   ; t2  recessive: one less to go, falls out at the 11th
+    push block                     ; partial word
+    mov isr, x                     ; 0xFFFFFFFF - (S-1)
+    push block
+    mov x, ~null
+.wrap

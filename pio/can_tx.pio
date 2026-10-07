@@ -1,0 +1,63 @@
+; CAN 2.0 transmitter: sends a frame that the host has already bit-stuffed and CRC'd, reads the bus back at the sample
+; point of every bit, and stops at the first bit that does not match.  Original program.  Needs a CAN transceiver
+; (TXD / RXD); the CRC-15 and the bit stuffing are done on the CPU (tools/can_frame.py) because PIO has no XOR.
+;
+; Pins (PIO pin numbers):  TXD = pin 0 (uo_out[0], push-pull, recessive = 1),  RXD = pin 1 (ui_in[1]).
+; Config: OUT_BASE=0 (1), SET_BASE=0 (1), IN_BASE=1, JMP_PIN=1, no side-set, autopull OFF, autopush OFF,
+;         OUT shift RIGHT and IN shift RIGHT (LSB first), PULL/PUSH threshold 32.  PIN_OWN bit 0 (TXD).
+;         TXD must be recessive (1) before the pin is handed to the PIO:  force `set pins, 1`.
+;
+; Host command (TX FIFO):  word 0 = n - 1   (n = 1..256 strict bits)
+;                          then ceil(n/32) words with the bits LSB first (bit 0 of word 0 goes out first).
+; The n "strict" bits are SOF .. CRC delimiter of the stuffed frame (tools/can_frame.py: tx_command()).  The PIO then
+; appends, by itself, the 12 bits that follow:  ACK slot (recessive, read back, a dominant level means acknowledged)
+; + 11 recessive bits (ACK delimiter, 7 EOF, 3 intermission).  An error / overload frame is the same thing: 6 dominant
+; bits as the strict part (n = 6) followed by the 12 recessive bits (the error delimiter is one bit longer than the
+; standard 8).
+;
+; Result (RX FIFO, one word per command):
+;   completed: the 12 bits read back after the strict part, first bit (the ACK slot) in bit 20, last in bit 31;
+;              bits [19:0] are 0.   (word >> 20) & 1 == 0  ->  somebody acknowledged.
+;   aborted:   0xFFFFFF00 | (~x & 0xFF) with x = bits still to send after the one that mismatched, so the mismatching
+;              bit has index n-1-x.  TXD is released (recessive) and the state machine parks (jmp park); the host must
+;              disable it, clear both FIFOs and restart it (`jmp cmd`) before the next frame.
+;              Sent recessive / read dominant = lost arbitration (inside the arbitration field) or bit error;
+;              sent dominant / read recessive = bit error.
+;
+; Timing: 16 PIO ticks per bit, bit rate = f_clk / (16 * CLKDIV).  TXD changes on tick 2 of the bit, the bus is read
+; back on tick 14 (12 ticks = 75 % after the TXD edge), so TXD -> transceiver -> RXD -> 2-flop synchroniser (the loop
+; delay) may be 0..7 clocks (a longer loop delay misses the ACK of a node that answers late, 9 or more reads the SOF
+; back as recessive and the frame aborts at bit 0).  Command
+; boundaries cost no ticks (the whole frame is one command, further words are pulled inside the bit loop), but the TX
+; FIFO must never run empty inside a frame (the host has to keep up: one word per 32 bit times).
+.program can_tx
+.wrap_target
+cmd:
+    pull block                     ; header: n-1  (stalls with TXD recessive between frames)
+    out x, 32                      ; x = n-1; the OSR is now empty, so the first bit pulls the first data word
+bit:
+    pull ifempty block             ; t0   next data word when the 32 bits of the last one are gone
+    out y, 1                       ; t1
+    mov pins, y          [10]      ; t2   drive TXD: 0 = dominant
+    jmp !y dom                     ; t13
+    jmp pin ok                     ; t14  recessive sent: the bus must be recessive too
+abort:
+    set pins, 1                    ;      release TXD
+    mov isr, ~x                    ;      0xFFFFFF00 | (255 - x)
+    push block
+park:
+    jmp park
+dom:
+    jmp pin abort                  ; t14  dominant sent: the bus must be dominant too
+ok:
+    jmp x-- bit                    ; t15  next strict bit
+; ---- ACK slot + 11 recessive bits (the strict part has just ended)
+    set pins, 1          [10]      ; t0
+    set x, 10            [2]       ; t11
+    in pins, 1           [1]       ; t14  ACK slot
+tail:
+    nop                  [13]      ; t0
+    in pins, 1                     ; t14
+    jmp x-- tail                   ; t15
+    push block                     ; the 12 bits, then wrap to cmd
+.wrap

@@ -127,5 +127,7 @@ standalone-tests:
 	vvp /tmp/tt_tb_pio_cpu_onewire.vvp | tee /tmp/tt_out_pio_cpu_onewire.log
 	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_vga.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_vga.v
 	vvp /tmp/tt_tb_pio_cpu_vga.vvp | tee /tmp/tt_out_pio_cpu_vga.log
+	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_can.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_can.v
+	vvp /tmp/tt_tb_pio_cpu_can.vvp | tee /tmp/tt_out_pio_cpu_can.log
 	$(MAKE) -f Makefile.proto
 	@! grep -l "FAIL" /tmp/tt_out_*.log
