@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       mutation_sweeps:
-        description: "Also run the mutation sweeps (adds about 1 hour 20 minutes)"
+        description: "Also run the mutation sweeps (adds about 2 hours 50 minutes)"
         type: boolean
         default: false
 
@@ -53,6 +53,7 @@ jobs:
           python3 tools/onewire_mutation_sweep.py
           python3 tools/i2c_slave_mutation_sweep.py
           python3 tools/swd_mutation_sweep.py
+          python3 tools/can_mutation_sweep.py
           python3 tools/gl_smoke_mutation_sweep.py
           python3 tools/gl_sig_mutation_sweep.py
 
