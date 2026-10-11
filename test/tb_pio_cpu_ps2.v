@@ -24,6 +24,16 @@ module tb_pio_cpu_ps2;
     wire miso_flash, miso_psram;
     wire miso_bus = (!cs0) ? miso_flash : (!cs1) ? miso_psram : 1'b0;
     wire [7:0] uio_in = {5'b0, miso_bus, 2'b0};
+`ifdef RANDOM_INIT
+  // power-on test (make standalone-tests RANDOM_INIT=<seed>): random contents in every flip-flop 1 ns after time 0
+  integer ri_seed;
+  initial begin
+    ri_seed = `RANDOM_INIT;
+    #1;
+`define RI_INST dut
+    `include "random_init.vh"
+  end
+`endif
 
     tt_um_agila32 dut (.ui_in(ui_in), .uo_out(uo_out), .uio_in(uio_in),
                        .uio_out(uio_out), .uio_oe(uio_oe), .ena(1'b1),

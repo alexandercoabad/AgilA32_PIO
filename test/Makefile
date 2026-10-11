@@ -6,6 +6,11 @@ SIM ?= icarus
 FST ?= -fst # Use more efficient FST format
 TOPLEVEL_LANG ?= verilog
 SRC_DIR = $(PWD)/../src
+# make standalone-tests RANDOM_INIT=<seed> : every standalone bench that instantiates tt_um_agila32 starts the chip
+# with random contents in all flip-flops (register file, RAM, PIO memory, FIFOs, ...); see tools/gen_random_init.py
+ifdef RANDOM_INIT
+RI_FLAGS = -DRANDOM_INIT=$(RANDOM_INIT) -I$(PWD)
+endif
 PROJECT_SOURCES = tt_um_agila32.v rv32i_core.v mem.v qspi_shared_engine.v pio.v pio_sm.v pio_fifo.v
 
 ifneq ($(GATES),yes)
@@ -63,78 +68,83 @@ include $(shell cocotb-config --makefiles)/Makefile.sim
 # generic SPI peripheral (CS2). See test/README.md's "Additional
 # standalone testbenches" section for what each one does.
 # ---------------------------------------------------------------------
-.PHONY: standalone-tests
-standalone-tests:
-	iverilog -g2012 -o /tmp/tt_tb_qspi_engine.vvp $(SRC_DIR)/qspi_shared_engine.v tb_qspi_engine.v
+.PHONY: standalone-tests benches
+# `make benches` runs only the Icarus testbenches (fast); `make benches RANDOM_INIT=<seed>` starts the chip with random
+# contents in every flip-flop that rst_n does not clear.  standalone-tests = benches + the cocotb protocol suite.
+standalone-tests: benches
+	$(MAKE) -f Makefile.proto
+	@! grep -l "FAIL" /tmp/tt_out_*.log
+
+benches:
+	iverilog -g2012 $(RI_FLAGS) -o /tmp/tt_tb_qspi_engine.vvp $(SRC_DIR)/qspi_shared_engine.v tb_qspi_engine.v
 	vvp /tmp/tt_tb_qspi_engine.vvp | tee /tmp/tt_out_qspi_engine.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_qspi_clkdiv.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_qspi_clkdiv.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_qspi_clkdiv.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_qspi_clkdiv.v
 	vvp /tmp/tt_tb_qspi_clkdiv.vvp | tee /tmp/tt_out_qspi_clkdiv.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_spi_periph.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v tb_spi_periph.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_spi_periph.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v tb_spi_periph.v
 	vvp /tmp/tt_tb_spi_periph.vvp | tee /tmp/tt_out_spi_periph.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_mem_ext.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_mem_ext.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_mem_ext.vvp $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_mem_ext.v
 	vvp /tmp/tt_tb_mem_ext.vvp | tee /tmp/tt_out_mem_ext.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_core_ext.vvp $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/qspi_shared_engine.v mem_extmem_test.v spi_ram_model.v tb_core_ext.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_core_ext.vvp $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/qspi_shared_engine.v mem_extmem_test.v spi_ram_model.v tb_core_ext.v
 	vvp /tmp/tt_tb_core_ext.vvp | tee /tmp/tt_out_core_ext.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_check.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_check.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_check.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_check.v
 	vvp /tmp/tt_tb_check.vvp | tee /tmp/tt_out_check.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_flash_handoff.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_flash_handoff.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_flash_handoff.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_flash_handoff.v
 	vvp /tmp/tt_tb_flash_handoff.vvp | tee /tmp/tt_out_flash_handoff.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_flash_paging.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_flash_paging.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_flash_paging.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_flash_paging.v
 	vvp /tmp/tt_tb_flash_paging.vvp | tee /tmp/tt_out_flash_paging.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_st7789_driver.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_st7789_driver.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_st7789_driver.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_st7789_driver.v
 	vvp /tmp/tt_tb_st7789_driver.vvp | tee /tmp/tt_out_st7789_driver.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_ps2_reader.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ps2_reader.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_ps2_reader.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ps2_reader.v
 	vvp /tmp/tt_tb_ps2_reader.vvp | tee /tmp/tt_out_ps2_reader.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_ps2_ascii.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ps2_ascii.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_ps2_ascii.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ps2_ascii.v
 	vvp /tmp/tt_tb_ps2_ascii.vvp | tee /tmp/tt_out_ps2_ascii.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_alu_test.vvp $(SRC_DIR)/rv32i_core.v alu_test_mem.v tb_alu_test.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_alu_test.vvp $(SRC_DIR)/rv32i_core.v alu_test_mem.v tb_alu_test.v
 	vvp /tmp/tt_tb_alu_test.vvp | tee /tmp/tt_out_alu_test.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_timer_pwm.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v tb_timer_pwm.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_timer_pwm.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v tb_timer_pwm.v
 	vvp /tmp/tt_tb_timer_pwm.vvp | tee /tmp/tt_out_timer_pwm.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_ebreak_halt.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ebreak_halt.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_ebreak_halt.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_ebreak_halt.v
 	vvp /tmp/tt_tb_ebreak_halt.vvp | tee /tmp/tt_out_ebreak_halt.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_boot_timeout.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_boot_timeout.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_boot_timeout.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_boot_timeout.v
 	vvp /tmp/tt_tb_boot_timeout.vvp | tee /tmp/tt_out_boot_timeout.log
 	python3 ../tools/pioasm.py ../pio/uart_tx.pio --format hex > /tmp/pio_uart_tx.hex
 	python3 ../tools/pioasm.py ../pio/uart_rx.pio --origin 4 --format hex > /tmp/pio_uart_rx.hex
 	python3 ../tools/pioasm.py ../pio/spi_master.pio --format hex > /tmp/pio_spi.hex
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_isa.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_isa.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_isa.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_isa.v
 	vvp /tmp/tt_tb_pio_isa.vvp | tee /tmp/tt_out_pio_isa.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_uart.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_uart.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_uart.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_uart.v
 	vvp /tmp/tt_tb_pio_uart.vvp | tee /tmp/tt_out_pio_uart.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_spi.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_spi.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_spi.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_spi.v
 	vvp /tmp/tt_tb_pio_spi.vvp | tee /tmp/tt_out_pio_spi.log
 	python3 ../tools/pioasm.py ../pio/vga_frame.pio --format hex > /tmp/pio_vga_frame.hex
 	python3 ../tools/pioasm.py ../pio/vga_line.pio --origin 23 --format hex > /tmp/pio_vga_line.hex
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_vga.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_vga.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_vga.vvp $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v tb_pio_vga.v
 	vvp /tmp/tt_tb_pio_vga.vvp | tee /tmp/tt_out_pio_vga.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_uart.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_uart.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_uart.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_uart.v
 	vvp /tmp/tt_tb_pio_cpu_uart.vvp | tee /tmp/tt_out_pio_cpu_uart.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_i2c.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_i2c.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_i2c.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_i2c.v
 	vvp /tmp/tt_tb_pio_cpu_i2c.vvp | tee /tmp/tt_out_pio_cpu_i2c.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_multi.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_multi.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_multi.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_multi.v
 	vvp /tmp/tt_tb_pio_cpu_multi.vvp | tee /tmp/tt_out_pio_cpu_multi.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_spi4.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_spi4.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_spi4.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_spi4.v
 	vvp /tmp/tt_tb_pio_cpu_spi4.vvp | tee /tmp/tt_out_pio_cpu_spi4.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_jtag.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_jtag.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_jtag.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_jtag.v
 	vvp /tmp/tt_tb_pio_cpu_jtag.vvp | tee /tmp/tt_out_pio_cpu_jtag.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_usb.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_usb.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_usb.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_usb.v
 	vvp /tmp/tt_tb_pio_cpu_usb.vvp | tee /tmp/tt_out_pio_cpu_usb.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_i2c_slave.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_i2c_slave.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_i2c_slave.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_i2c_slave.v
 	vvp /tmp/tt_tb_pio_cpu_i2c_slave.vvp | tee /tmp/tt_out_pio_cpu_i2c_slave.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ps2.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ps2.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ps2.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ps2.v
 	vvp /tmp/tt_tb_pio_cpu_ps2.vvp | tee /tmp/tt_out_pio_cpu_ps2.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ws2812.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ws2812.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ws2812.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ws2812.v
 	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp | tee /tmp/tt_out_pio_cpu_ws2812.log
 	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp +img=pio_ws2812_rgbw_flash_image.hex +bits=32 | tee /tmp/tt_out_pio_cpu_ws2812_rgbw.log
 	vvp /tmp/tt_tb_pio_cpu_ws2812.vvp +img=pio_ws2812_reset280_flash_image.hex +reset_us=280 | tee /tmp/tt_out_pio_cpu_ws2812_reset280.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ws2812_repeat.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ws2812_repeat.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_ws2812_repeat.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_ws2812_repeat.v
 	vvp /tmp/tt_tb_pio_cpu_ws2812_repeat.vvp | tee /tmp/tt_out_pio_cpu_ws2812_repeat.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_onewire.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_onewire.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_onewire.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_onewire.v
 	vvp /tmp/tt_tb_pio_cpu_onewire.vvp | tee /tmp/tt_out_pio_cpu_onewire.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_vga.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_vga.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_vga.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_vga.v
 	vvp /tmp/tt_tb_pio_cpu_vga.vvp | tee /tmp/tt_out_pio_cpu_vga.log
-	iverilog -g2012 -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_can.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_can.v
+	iverilog -g2012 $(RI_FLAGS) -I $(SRC_DIR) -o /tmp/tt_tb_pio_cpu_can.vvp $(SRC_DIR)/tt_um_agila32.v $(SRC_DIR)/pio.v $(SRC_DIR)/pio_sm.v $(SRC_DIR)/pio_fifo.v $(SRC_DIR)/rv32i_core.v $(SRC_DIR)/mem.v $(SRC_DIR)/qspi_shared_engine.v spi_ram_model.v tb_pio_cpu_can.v
 	vvp /tmp/tt_tb_pio_cpu_can.vvp | tee /tmp/tt_out_pio_cpu_can.log
-	$(MAKE) -f Makefile.proto
 	@! grep -l "FAIL" /tmp/tt_out_*.log

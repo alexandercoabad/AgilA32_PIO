@@ -31,6 +31,16 @@ module tb_check;
     // every other uio bit is chip-driven (uio_oe=1 for them), so tying
     // the rest to 0 here is a don't-care, not a real signal.
     wire [7:0] uio_in = {5'b0, (slave_enabled ? qspi_miso_from_slave : 1'b0), 2'b0};
+`ifdef RANDOM_INIT
+  // power-on test (make standalone-tests RANDOM_INIT=<seed>): random contents in every flip-flop 1 ns after time 0
+  integer ri_seed;
+  initial begin
+    ri_seed = `RANDOM_INIT;
+    #1;
+`define RI_INST dut
+    `include "random_init.vh"
+  end
+`endif
 
     tt_um_agila32 dut (
         .ui_in   (ui_in),

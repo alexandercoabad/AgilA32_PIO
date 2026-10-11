@@ -1,0 +1,14 @@
+
+examples/chase.elf:	file format elf32-littleriscv
+
+Disassembly of section .text:
+
+000000b4 <main>:
+      b4:      	li	a1, 0x0
+      b8:      	li	a0, 0x1
+      bc:      	slli	a2, a1, 0xb
+      c0:      	addi	a1, a1, 0x1
+      c4:      	srli	a2, a2, 0x1d
+      c8:      	sll	a2, a0, a2
+      cc:      	sb	a2, 0xf0(zero)
+      d0:      	j	0xbc <main+0x8>

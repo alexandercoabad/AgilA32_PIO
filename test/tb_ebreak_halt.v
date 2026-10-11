@@ -181,6 +181,16 @@ module tb_ebreak_halt;
     wire [7:0] uo_out2;
     wire [7:0] uio_out2;
     wire [7:0] uio_oe2;
+`ifdef RANDOM_INIT
+  // power-on test (make standalone-tests RANDOM_INIT=<seed>): random contents in every flip-flop 1 ns after time 0
+  integer ri_seed;
+  initial begin
+    ri_seed = `RANDOM_INIT;
+    #1;
+`define RI_INST top_dut
+    `include "random_init.vh"
+  end
+`endif
 
     tt_um_agila32 top_dut (
         .ui_in   (ui_in2),

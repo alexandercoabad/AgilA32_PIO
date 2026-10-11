@@ -1,0 +1,9 @@
+
+examples/switches.elf:	file format elf32-littleriscv
+
+Disassembly of section .text:
+
+000000b4 <main>:
+      b4:      	lbu	a0, 0xf4(zero)
+      b8:      	sb	a0, 0xf0(zero)
+      bc:      	j	0xb4 <main>

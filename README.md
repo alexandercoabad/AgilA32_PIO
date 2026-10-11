@@ -16,6 +16,12 @@ a RISC-V CPU built entirely out of discrete 7400-series logic chips (no
 FPGA, no microcontroller) -- the "just basic logic" idea of a minimal
 RISC-V core is where this whole line of projects started.
 
+## Try it and program it
+
+- **Browser simulator** (the real RTL compiled to WebAssembly, with waveform, block diagram, LEDs, 7-segment display and example programs): https://alexandercoabad.github.io/agila32/
+- **C and assembly programs**: `c/` holds a small C flow for the 44-byte GPIO-bootloader window with examples (blink, counter, chase, switches, PILIPINAS LASALLE on a 7-segment display); see `c/README.md`.
+- **Submission checklist** with the evidence for each requirement: `SUBMISSION.md`.
+
 ## Protocol coverage
 
 **Test counts** (all run by `make standalone-tests` in `test/`, and on every push by `.github/workflows/pio-tests.yaml`): **120 cocotb protocol tests**
@@ -395,6 +401,7 @@ pio/
   i2c_mm.pio              I2C multi-master (arbitration, clock synchronisation; 27 words)
   i2c_slave_rx.pio, i2c_slave_tx.pio   I2C slave receive / transmit programs (swapped by the CPU at run time)
 tools/
+  gen_random_init.py      lists the flip-flops that rst_n does not clear and writes test/random_init.vh (start-up test, RANDOM_INIT)
   build_boot_rom.py       assembles the boot ROM (self-test + demo/listen loop + bootloader)
                           into src/boot_rom_body.vh -- run this and re-copy its output if you
                           change what the boot ROM itself does
@@ -447,6 +454,8 @@ test/
   alu_test_mem.v          minimal flat ROM+RAM harness (not mem.v) used only by tb_alu_test.v
   tb_alu_test.v           standalone: every asm_pineapple.py opcode, run through the real core, checked
                           against hand-computed register values
+c/                        C flow for the 44-byte bootloader window, examples (blink, counter, chase, switches, PILIPINAS); see c/README.md
+SUBMISSION.md             contest submission checklist with the evidence for each requirement
 info.yaml                 Tiny Tapeout project metadata (title, pinout, tiles...)
 docs/info.md              project datasheet shown on the Tiny Tapeout site
 ```
@@ -474,6 +483,8 @@ make standalone-tests   # QSPI engine, clock divider, generic SPI peripheral, ex
                          # PS/2 reader/ASCII, asm_pineapple.py instruction-encoding tests, all PIO
                          # testbenches (pio.v level and CPU-driven, incl. 1-Wire, VGA and CAN), and at the
                          # end the 120 cocotb PIO protocol tests (Makefile.proto)
+make benches            # only the Icarus testbenches (about 5 minutes)
+make RANDOM_INIT=3      # start-up test: every flip-flop that rst_n does not clear starts with random contents (also: make benches RANDOM_INIT=3)
 make -f Makefile.proto COCOTB_TEST_FILTER=test_onewire_read_rom   # one protocol test (the longest,
                          # test_onewire_clock_tolerance, takes about 80 s)
 ```

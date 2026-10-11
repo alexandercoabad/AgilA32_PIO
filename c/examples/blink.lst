@@ -1,0 +1,12 @@
+
+examples/blink.elf:	file format elf32-littleriscv
+
+Disassembly of section .text:
+
+000000b4 <main>:
+      b4:      	li	a0, 0x0
+      b8:      	slli	a1, a0, 0xd
+      bc:      	addi	a0, a0, 0x1
+      c0:      	srli	a1, a1, 0x1f
+      c4:      	sb	a1, 0xf0(zero)
+      c8:      	j	0xb8 <main+0x4>
