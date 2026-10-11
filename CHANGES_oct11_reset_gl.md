@@ -12,4 +12,4 @@
 - tools/pio_host.py: new `fast_qspi()` (SB x0 -> 0xFB). build_pio_gl_smoke.py / build_pio_gl_sig.py call it first; test/pio_gl_*_flash_image.hex regenerated.
 - test/test.py: `EMULATE_GL_QSPI=1` skips the force, so an RTL run behaves like gate level for timing.
 - Measured (EMULATE_GL_QSPI=1): smoke 1,927,200 -> 40,200 polling clocks; signature 4,362,900 -> 80,900 (4,401,920 -> 119,920 in all). Same golden values, all pass.
-- Expected gl_test time ~15-20 min instead of 3 h 11 min: ESTIMATE, confirm with a CI run.
+- CI confirmation (gds run #79, push ed772fa): gl_test 11 min 1 s (was 3 h 11 min), gds 2 h 35 min, whole workflow 2 h 46 min 38 s, 13/13 gate-level. Smoke 111 s (was 3,444 s), signature 164 s (was 7,564 s). pio-tests run #30: 13 min 55 s, passed (includes seeds 1-5).
