@@ -38,6 +38,10 @@ COMPILE_ARGS    += -DSIM
 PDK ?= ihp-sg13g2
 PDK_LIB = $(patsubst ihp-%,%,$(PDK))
 VERILOG_SOURCES += $(PDK_ROOT)/$(PDK)/libs.ref/$(PDK_LIB)_io/verilog/$(PDK_LIB)_io.v
+# The cell models use UDP primitives (ihp_dff_r, ihp_mux2, ihp_mux4, ...) that newer PDK versions keep in a separate
+# <lib>_udp.v file; it must be read BEFORE the stdcell file or the gate-level build stops with "Unknown module type:
+# ihp_dff_r". $(wildcard) skips it for PDK versions that do not have the file.
+VERILOG_SOURCES += $(wildcard $(PDK_ROOT)/$(PDK)/libs.ref/$(PDK_LIB)_stdcell/verilog/$(PDK_LIB)_udp.v)
 VERILOG_SOURCES += $(PDK_ROOT)/$(PDK)/libs.ref/$(PDK_LIB)_stdcell/verilog/$(PDK_LIB)_stdcell.v
 
 # this gets copied in by the GDS action workflow
