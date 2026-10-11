@@ -47,6 +47,7 @@ TX0 = [(a << 16) | b for a, b in EXEC_WORDS]
 TX1 = [0x00005AC3]                                      # SM1: x = 0xC3, y = 0x5A (autopull, shift right)
 
 h = PioHost()
+h.fast_qspi()                    # first thing: run the rest of the image at the fastest QSPI divider
 h.load_program(sig0)
 h.load_program(sig1)
 h.write_reg(sm_reg(0, SM_PINCTRL), pinctrl(out_base=0, out_count=8, set_base=0, set_count=5, in_base=2))

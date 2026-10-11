@@ -326,6 +326,12 @@ class PioHost:
         self._reserve(4)
         self.p.page.SB(reg, 0, addr)
 
+    def fast_qspi(self):
+        """QSPI_CTRL (0xFB) <- 0: fetch from flash at the fastest divider (sys_clk/2).  The reset value is
+        sys_clk/128, which is right for a real Pmod but makes gate-level simulation ~30x slower."""
+        self._reserve(4)
+        self.p.page.SB(0, 0, 0xFB)
+
     def halt(self):
         """EBREAK: park the CPU. The PIO state machines keep running."""
         self._reserve(4)

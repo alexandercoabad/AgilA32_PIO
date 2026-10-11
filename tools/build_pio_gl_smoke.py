@@ -27,6 +27,7 @@ echo = assemble(open(os.path.join(here, "..", "pio", "gl_echo.pio")).read(), ori
 pulses = assemble(open(os.path.join(here, "..", "pio", "gl_pulses.pio")).read(), origin=len(echo.instrs))
 
 h = PioHost()
+h.fast_qspi()                    # first thing: run the rest of the image at the fastest QSPI divider
 h.load_program(echo)
 h.load_program(pulses)
 h.write_reg(sm_reg(0, SM_PINCTRL), pinctrl(set_count=0))

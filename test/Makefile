@@ -12,6 +12,13 @@ ifneq ($(GATES),yes)
 
 # RTL simulation:
 SIM_BUILD				= sim_build/rtl
+# make RANDOM_INIT=<seed> : start every un-reset flip-flop (register file, RAM,
+# PIO instruction memory, FIFOs, ...) with random contents instead of zero.
+ifdef RANDOM_INIT
+SIM_BUILD				= sim_build/rtl_rand$(RANDOM_INIT)
+COMPILE_ARGS    += -DRANDOM_INIT=$(RANDOM_INIT)
+COMPILE_ARGS    += -I$(PWD)
+endif
 VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,$(PROJECT_SOURCES))
 
 else

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2024 Tiny Tapeout
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
@@ -156,6 +157,8 @@ def speed_up_qspi(dut):
     now-larger budgets) -- it's a speed optimization there, not a
     correctness dependency anywhere anymore.
     """
+    if os.environ.get("EMULATE_GL_QSPI"):      # RTL run that mimics the gate-level netlist: no force, reset-default divider
+        return
     try:
         dut.user_project.u_mem.qspi_div_sel.value = 0
     except AttributeError:
