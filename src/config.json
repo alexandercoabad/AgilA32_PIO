@@ -22,7 +22,7 @@
   "//": "was done at 1000ns and reported a reg-to-reg limit of 21.5ns (46.5MHz) in the",
   "//": "slow corner (1.08V/125C), so 41.667ns leaves about 1.9x margin. Raise later if",
   "//": "the flow reports comfortable slack.",
-  "CLOCK_PERIOD": 41.667,
+  "CLOCK_PERIOD": 41.0,
 
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
