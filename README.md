@@ -212,7 +212,7 @@ magnetics), and nothing has been measured on silicon yet.
 ## Portability: PDK-agnostic RTL, no macros
 - **No PDK dependency in the RTL.** `src/*.v` and `*.vh` are plain synthesizable Verilog. No standard cell, I/O cell or other library primitive is instantiated (every instantiated module is defined in `src/`), and the only conditional compilation is `` `ifndef SYNTHESIS `` around simulation-only code. AgilA32's CPU-only version was hardened on Sky130 (previous target) and moved to IHP SG13 CMOS5L (current target) without an RTL change; only the flow files differ (`MIGRATION_TO_IHP.md`). The PIO block was added after that move and has been hardened on IHP only, so its portability rests on the RTL being generic, not on a second PDK run. (The 8-bit predecessor, [AgilA8 on Sky130](https://github.com/alexandercoabad/AgilA8_microcontroller), is a separate design tuned to Sky130; this claim is about AgilA32.)
 - **No macros, no hard IP.** `src/config.json` lists no macros or extra files. All memories (the 16-bit PIO instruction memory, the CPU register file, the 48 B on-chip RAM) are Verilog arrays that synthesis turns into flip-flops, not SRAM macros. The trade-off is area: flip-flop memory is larger than SRAM, which is why the PIO instruction memory is only 32 words. In return, any open flow and PDK can build the design unchanged.
-- **What is not portable.** The timing and area figures (24 MHz clock with a 46.5 MHz post-layout limit in the slow corner, 6x4 tiles, 12/12 gate-level tests) come from the IHP run. A different PDK needs its own flow run to confirm them.
+- **What is not portable.** The timing and area figures (24 MHz clock with a 46.5 MHz post-layout limit in the slow corner, 8x4 tiles, 13/13 gate-level tests) come from the IHP runs. A different PDK needs its own flow run to confirm them.
 
 ## Layout
 
@@ -320,12 +320,16 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       tiles, 53.8% routing utilization, 12,548 cells (excluding
       fill/tap), clean DRC/precheck (15/15 checks) and gate-level tests
       (11/11) -- see `.github/workflows/gds.yaml` run history
-- [x] **Hardened on the IHP CMOS5L flow (current target)** at 6x4 tiles with
+- [x] **Hardened on the Tiny Tapeout SG13G2 flow (earlier run, 6x4 tiles)** with
       the PIO block: 51.45% routing utilization, 34,053 cells (excluding
       fill/tap), clean lint, precheck 10/10 and gate-level tests 11/11
       (CI run #11, ~2h28m for the `gds` job -- expect a long build);
       with the feature 18 PIO smoke test added, gate-level tests 12/12
       (2,587 s, `gl_test` about 50 min instead of about 6); with the feature 20 signature test, gate-level tests 13/13 (`gl_test` 3 h 11 min)
+- [x] **Hardened on the IHP SG13 CMOS5L flow (current target)** at **8x4 tiles**, placement density 58 %
+      (CI run #90, 12-13 Oct 2026): 38,504 cells (excluding fill/tap), 41.8 % utilisation, clean lint, precheck
+      9/9, gate-level tests 13/13; `gds` 4 h 34 min, `precheck` 4 h 47 min, `gl_test` 8 min. At 6x4 detailed routing
+      did not converge; at density 60 % the precheck found one Metal2 spacing violation (M2.b) -- see `SUBMISSION.md`
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
@@ -333,7 +337,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       programs (`pio/`), assembled by `tools/pioasm.py`, loaded by
       `tools/pio_host.py` -- see docs/info.md's "PIO" section and
       `CHANGES_feature6.md`. Built for the Jane Street protocol-emulator
-      ASIC competition (6x4 tiles).
+      ASIC competition (hardened at 8x4 tiles).
 - [x] Test suites (see "Testing locally" below): on-chip
       cocotb regression (self-test, demo counter, full bootload-and-run),
       95 cocotb PIO protocol tests, and 31 standalone Icarus testbenches

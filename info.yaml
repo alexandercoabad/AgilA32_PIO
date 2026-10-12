@@ -8,7 +8,7 @@ project:
   clock_hz:     24000000      # 24 MHz -- 2x the 12 MHz PIO tick low-speed USB needs; matches CLOCK_PERIOD in src/config.json (41.667 ns). Post-layout limit is 46.5 MHz (slow corner); confirmed by a GDS run at this 24 MHz period (setup slack +20.2 ns).
 
   # How many tiles your design occupies? A single IHP tile is roughly 200x150 uM.
-  tiles: "8x4"          # Jane Street protocol-emulator ASIC competition: 6x4 tiles. (CPU alone was ~0.174 mm2 / ~10 tiles; the 2-SM PIO block roughly doubles generic-gate count -- re-run the real flow to confirm fit.)
+  tiles: "8x4"          # 8x4 tiles on the IHP CMOS5L flow (6x4 failed detailed routing from congestion; 8x4 passes gds, precheck and gl_test at placement density 58 %).
 
   # Your top module name must start with "tt_um_". Make it unique by including your github username:
   top_module:  "tt_um_agila32"
