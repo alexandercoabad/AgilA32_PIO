@@ -9,6 +9,8 @@
 >
 > **Originality:** The CPU is written for this project, not derived from an existing open-source core; it follows the public RV32I specification, and the PIO follows the public RP2040 datasheet.
 >
+> **Third-party material:** the PIO block is an independent implementation, not affiliated with or endorsed by Raspberry Pi Ltd; "Raspberry Pi", "RP2040" and "Pico" are Raspberry Pi's trademarks, used only to say what the block is compatible with. Some programs in `pio/` are derived from the Pico SDK / pico-examples (BSD-3-Clause); see [`NOTICE.md`](NOTICE.md).
+>
 > Developed by Alexander Co Abad with the help of Claude AI (Sonnet 5.5).
 
 Originally inspired by [Pineapple ONE](https://pineapple-one.github.io/),

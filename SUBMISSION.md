@@ -12,6 +12,7 @@ Last updated 13 Oct 2026 (after gds run #90 on the SG13 CMOS5L flow).
 | Architecture and instruction-set documentation | `README.md`, `docs/info.md`, `docs/AgilA32_Project_Documentation.pdf` (also at the repo root, with a `.docx`) | Done |
 | Assembler / toolchain with example programs | `tools/asm_pineapple.py` (RV32I), `tools/pioasm.py` (PIO), `tools/build_pio_*.py` (one image per protocol), `c/` (C flow and examples) | Done |
 | Write-up of the verification approach | Documentation Section 7; `test/README.md` | Done |
+| Third-party code and trademarks | `NOTICE.md` (Pico SDK / pico-examples BSD-3-Clause notice, trademark statement); README | Done |
 | Description of how AI tools were used | Documentation Section 11; credit line in `README.md` | Done |
 | Uses `rst_n` | all state that matters is reset by `rst_n`; test with random start-up contents (see below) | Done |
 | 24 digital pins at most | `info.yaml`, `src/tt_um_agila32.v` | Check again against the organisers' 8x4 template when it is released (expected mid-October) |

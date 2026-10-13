@@ -13,3 +13,9 @@ What was learned:
 - With density 60 % the precheck reported one Metal2 spacing violation (M2.b, about 1 nm at one corner); the flow is deterministic, so reruns repeat it. Density 58 % is clean. Density 55 % and a 41 ns clock hit the six-hour limit in gds.
 - gl_test needs the cell library's `_udp.v` read before `_stdcell.v` (in `test/Makefile`).
 - Earlier numbers labelled CMOS5L (51.45 %, 34,053 cells, runs #65 and #79) came from the SG13G2 flow at 6x4 and are now labelled that way.
+
+## Third-party notices (13 Oct 2026)
+
+Added `NOTICE.md` (Pico SDK / pico-examples BSD-3-Clause notice for the derived programs in `pio/`, trademark statement), a
+note in `README.md`, `info.md`, `docs/info.md` and `SUBMISSION.md`, and a "Third-party code and names" bullet in Section 11 of the
+project documentation.

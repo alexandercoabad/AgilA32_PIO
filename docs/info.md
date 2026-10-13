@@ -731,7 +731,7 @@ cycle-exact timing, so a protocol is *a short program loaded after
 fabrication* -- nothing about UART, SPI, etc. is hard-wired. Programs
 written for the RP2040 (Pico SDK `uart_tx`, `uart_rx_mini`, `spi_cpha0`
 ...) run unmodified when they stay on pins 0-9 (`pio/` holds three of
-them; `tools/pioasm.py` assembles the stock `pioasm` syntax).
+them; `tools/pioasm.py` assembles the stock `pioasm` syntax). The PIO block is an independent implementation of the RP2040 PIO instruction set, not affiliated with or endorsed by Raspberry Pi Ltd; some programs in `pio/` derive from the Pico SDK (BSD-3-Clause), see `NOTICE.md`.
 
 **Bus interface.** The core's 8-bit address space was full, so PIO uses
 two bytes: `PIO_IDX` (`0xFF`, bits[6:0] = register index, bit 7 =
