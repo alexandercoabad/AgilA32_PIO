@@ -44,6 +44,19 @@ jobs:
           ! grep -q "<failure" results.xml
           ! grep -l "FAIL" /tmp/tt_out_*.log
 
+      - name: Constrained-random protocol tests
+        shell: bash
+        run: |
+          cd test
+          # test/test_pio_random.py: random divider / mode / address / byte values / baud error / gaps for UART, SPI, I2C and PS/2,
+          # checked against protocol reference models (about 40 s per seed).  A failure is reproduced with the same PIO_RANDOM_SEED.
+          for seed in 1 2 3 4 5; do
+            rm -f results.xml
+            PIO_RANDOM_SEED=$seed make -f Makefile.random
+            cp results.xml results_random_seed$seed.xml
+            python -m cocotb_tools.check_results results.xml
+          done
+
       - name: Random start-up contents (register file, RAM, PIO FIFO memory)
         shell: bash
         run: |
@@ -85,5 +98,6 @@ jobs:
           path: |
             test/results.xml
             test/results_seed*.xml
+            test/results_random_seed*.xml
             /tmp/random_benches_seed*.log
             /tmp/tt_out_*.log
