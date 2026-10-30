@@ -1,0 +1,23 @@
+# Formal proofs for src/pio_sm.v (unbounded, abc pdr).  Run through run.sh, which first writes the instrumented copy build/pio_sm_props.v.
+#   core   : S1-S7 in sm_props.vh, every input free in every cycle (any instruction, configuration, FIFO / pin / IRQ state)
+#   clkdiv : S8, the clock divider ticks exactly every N clocks; accumulator below the divisor.  Proven for fixed dividers
+#            below 8.0 (CLKDIV_SMALL): the solver does not reach the full 24-bit divider range
+[tasks]
+core
+clkdiv
+
+[options]
+mode prove
+aigsmt none
+
+[engines]
+abc pdr
+
+[script]
+core:   read -formal -D FORMAL pio_sm_props.v
+clkdiv: read -formal -D FORMAL -D CLKDIV -D CLKDIV_SMALL -D CLKDIV_ACC -D CLKDIV_TICK pio_sm_props.v
+prep -top pio_sm
+
+[files]
+build/pio_sm_props.v
+sm_props.vh

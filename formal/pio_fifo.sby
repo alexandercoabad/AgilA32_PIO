@@ -1,0 +1,25 @@
+# Formal proofs for src/pio_fifo.v (unbounded, abc pdr).  Run through run.sh, which first writes the instrumented copy build/pio_fifo_props.v.
+#   props : fifo_props.vh -- level / flags / pointers / in-order data integrity / clear / reset (inserted inside a COPY of the design)
+#   equiv : pio_fifo_formal.v -- the FIFO behaves exactly like a simple shift-register reference queue for every input sequence
+[tasks]
+props
+equiv
+
+[options]
+mode prove
+aigsmt none
+
+[engines]
+abc pdr
+
+[script]
+props: read -formal -D FORMAL pio_fifo_props.v
+props: prep -top pio_fifo
+equiv: read -formal pio_fifo.v pio_fifo_formal.v
+equiv: prep -top pio_fifo_formal
+
+[files]
+props: build/pio_fifo_props.v
+props: fifo_props.vh
+equiv: ../src/pio_fifo.v
+equiv: pio_fifo_formal.v
