@@ -5,7 +5,7 @@ Unbounded proofs (every input sequence, no depth limit) with SymbiYosys and the 
 properties can see internal registers.
 
     cd formal && bash run.sh              # four proofs, about 1 minute
-    cd formal && bash run.sh --mutants    # also: every harness must reject deliberately broken copies of the design (about 4 minutes)
+    cd formal && bash run.sh --mutants    # also: every harness must reject deliberately broken copies of the design (GitHub run #3 took 2 min 20 s in total with this ticked)
 
 Tools: Yosys 0.33, SymbiYosys, `yosys-abc` (OSS CAD Suite or Ubuntu 24.04 `yosys` + SymbiYosys). The z3 and boolector SMT engines
 were too slow for these designs, hence `abc pdr`.
@@ -35,6 +35,13 @@ were too slow for these designs, hence `abc pdr`.
 | S6 | delay slots last exactly the programmed number of ticks |
 | S7 | restart clears the OSR / ISR counters, ISR, delay, phase and EXEC state |
 | S8 | clock divider: ticks exactly every N clocks for an integer divider N, accumulator stays below the divisor |
+
+## Result on GitHub
+
+`.github/workflows/formal.yaml` (manual, `workflow_dispatch`, optional `mutants` input) ran for the first time successfully as run #3 on 30 Oct 2026
+(push `f03db8d`): success, job 2 min 16 s, workflow 2 min 20 s, artifact `formal-logs`. All four proofs ended `DONE (PASS, rc=0)` with the `abc pdr` engine
+(`pio_fifo_props` 4 s, `pio_fifo_equiv` 10 s, `pio_sm_core` 1 s, `pio_sm_clkdiv` 20 s of solver time). That run had the `mutants` option ticked: all 28 mutants were rejected
+(39 harness checks). The mutant lines are in the job's console output, not in the `formal-logs` artifact. The one annotation was GitHub's Node.js 20 deprecation warning for one of the actions.
 
 ## Limits (stated honestly)
 

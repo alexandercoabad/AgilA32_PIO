@@ -9,6 +9,8 @@ New: `formal/` (see `formal/README.md`)
   stall and forced-instruction PC rules, exact delay-slot length, restart state, clock divider period (dividers below 8.0).
 - `check_mutants.py`: 28 deliberately broken copies of the design; every harness rejects all of them.
 - `instrument.py`: inserts the properties into a COPY of the design (src/ is never touched).
-- `.github/workflows/formal.yaml`: manual-only workflow (untested on GitHub; the proofs were run locally).
+- `.github/workflows/formal.yaml`: manual-only workflow. First GitHub run (#3, 30 Oct 2026, push `f03db8d`, started by hand, `mutants` option ticked): success, job 2 min 16 s, workflow 2 min 20 s; all four proofs PASS (`pio_fifo_props` 4 s, `pio_fifo_equiv` 10 s, `pio_sm_core` 1 s, `pio_sm_clkdiv` 20 s); artifact `formal-logs` (8.33 KB). One annotation: GitHub's Node.js 20 deprecation warning. The mutant check also ran: all 28 mutants rejected (39 harness checks); its output is in the job console, not in the artifact.
+
+Documentation updated after that run: `README.md` (badge, test summary, verification list, status checklist, repo layout, "Formal verification" section), `AgilA32_Project_Documentation.pdf` (Section 7.6 and the tables that said "no formal verification"), and the stale "untested on GitHub" note in `formal.yaml`.
 
 Not covered formally: `pio.v`, `mem.v`, the CPU core, the QSPI engine; S8 only for dividers below 8.0.

@@ -1,6 +1,6 @@
 #!/bin/bash
 # Formal verification of the PIO block's FIFO and state machine.
-#     cd formal && ./run.sh              proofs only (about 2 minutes)
+#     cd formal && ./run.sh              proofs only (about 1 minute)
 #     cd formal && ./run.sh --mutants    also checks that every harness rejects deliberately broken copies of the design
 # Needs yosys, sby (SymbiYosys) and yosys-abc (all in the OSS CAD Suite).  Works on COPIES of the design files in build/;
 # src/ is never modified.  Results: PASS / FAIL per proof below; sby work directories are left in formal/ (git-ignored).

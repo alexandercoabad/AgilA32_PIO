@@ -381,7 +381,7 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       passing in simulation (the workflow's first GitHub run on 4 Oct 2026 passed, 9 min 4 s)
 - [x] **Formal proofs of the PIO FIFO and state machine** (30 Oct 2026): four unbounded SymbiYosys / `abc pdr` proofs in `formal/`
       (`pio_fifo.v` properties and reference-queue equivalence, `pio_sm.v` properties and clock-divider period), all passing in the
-      manual `formal.yaml` workflow (run #3, push `f03db8d`, 2 min 20 s); 28 mutants of the design all rejected (local run).
+      manual `formal.yaml` workflow (run #3, push `f03db8d`, 2 min 20 s); all 28 mutants of the design rejected (39 harness checks), locally and in that run (`mutants` option ticked).
       Not formal: `pio.v`, `mem.v`, the CPU core, the QSPI engine; clock-divider timing only for dividers below 8.0.
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
@@ -463,7 +463,7 @@ tools/
   sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
 formal/
-  run.sh                  four unbounded proofs (about 1 minute); `bash run.sh --mutants` also runs check_mutants.py (about 4 more minutes)
+  run.sh                  four unbounded proofs (about 1 minute); `bash run.sh --mutants` also runs check_mutants.py (GitHub run #3: 2 min 20 s in total)
   fifo_props.vh, pio_fifo_formal.v, pio_fifo.sby   FIFO properties P1-P4 and equivalence with a reference queue
   sm_props.vh, pio_sm.sby                          state-machine properties S1-S8 (any instruction, configuration and FIFO / pin / IRQ state)
   instrument.py           writes a COPY of the design in formal/build/ with the properties inserted (src/ is never modified)
@@ -539,7 +539,7 @@ passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS
 
 ```
 cd formal && bash run.sh              # four unbounded proofs, about 1 minute (Yosys, SymbiYosys, yosys-abc; abc pdr engine)
-cd formal && bash run.sh --mutants    # also: all 28 broken copies of the design must be rejected (about 4 more minutes)
+cd formal && bash run.sh --mutants    # also: all 28 broken copies of the design must be rejected (GitHub run #3: 2 min 20 s in total)
 ```
 
 Proven for every input sequence: the FIFO invariants and bit-exact in-order data (P1-P4), equivalence of the FIFO with a reference queue,
@@ -547,7 +547,7 @@ and the state-machine rules S1-S7 plus the clock-divider period S8 (integer divi
 is manual (`workflow_dispatch`, option `mutants`) and is not part of the Tiny Tapeout flow. Its first successful run on GitHub
 (run #3, 30 Oct 2026, push `f03db8d`, 2 min 20 s, job 2 min 16 s) passed all four proofs (`pio_fifo_props` 4 s, `pio_fifo_equiv` 10 s,
 `pio_sm_core` 1 s, `pio_sm_clkdiv` 20 s, each ending `DONE (PASS, rc=0)`; log artifact `formal-logs`); the only annotation was GitHub's
-Node.js 20 deprecation warning for one of the actions. That run did not include the mutant check. What is **not** proven: `pio.v`,
+Node.js 20 deprecation warning for one of the actions. That run had the `mutants` option ticked: all 28 mutants were rejected (39 harness checks: 11 FIFO mutants against each of two harnesses, 15 state-machine, 2 clock-divider). What is **not** proven: `pio.v`,
 `mem.v`, the CPU core and the QSPI engine (covered by the simulation tests above), that a PIO program implements a protocol correctly, and
 clock-divider timing for dividers of 8.0 and above. See `formal/README.md`.
 
