@@ -1,4 +1,4 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg) ![](../../workflows/formal/badge.svg)
 
 # AgilA32 — an RV32I CPU with RP2040-compatible PIO for Tiny Tapeout (IHP SG13CMOS5L shuttle)
 
@@ -31,6 +31,11 @@ RISC-V core is where this whole line of projects started.
 testbenches**: 13 CPU-driven top-level demos (`tb_pio_cpu_uart.v`,
 `tb_pio_cpu_i2c.v`, `tb_pio_cpu_multi.v`, `tb_pio_cpu_spi4.v`, `tb_pio_cpu_jtag.v`, `tb_pio_cpu_usb.v`, `tb_pio_cpu_i2c_slave.v`, `tb_pio_cpu_ps2.v`, `tb_pio_cpu_ws2812.v`, `tb_pio_cpu_ws2812_repeat.v`, `tb_pio_cpu_onewire.v`, `tb_pio_cpu_vga.v`, `tb_pio_cpu_can.v`) and 4 that
 drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio_vga.v`).
+
+**Formal proofs and random tests** (added 30 Oct 2026, no change to `src/`): four unbounded SymbiYosys proofs of the PIO FIFO
+(`pio_fifo.v`) and of one state machine (`pio_sm.v`) in `formal/` -- **all four pass** in the manual GitHub workflow `formal.yaml`
+(run #3, 30 Oct 2026, commit `f03db8d`, 2 min 20 s) -- and 64 constrained-random cocotb protocol tests per seed
+(`test/test_pio_random.py`: UART, SPI, I2C, PS/2). See "Formal verification" below.
 
 | Protocol | Runs on | Status | Verified by |
 |---|---|---|---|
@@ -190,6 +195,20 @@ unchanged.
   building it, three WAIT encodings in the supplied testbench turned out to
   have the wrong source field; they are fixed and documented in
   `CHANGES_feature6.md`.
+- **Formal proofs of the PIO FIFO and state machine** (`formal/`, 30 Oct 2026). Unbounded proofs (every input sequence, no depth
+  limit) with SymbiYosys and the `abc pdr` engine, on a copy of the design that has the properties inserted -- `src/` is not modified.
+  `pio_fifo.v` (the TX and RX queue of every state machine): level and flags consistent, push into a full / pop of an empty FIFO change
+  nothing, pointers agree with the level, a word pushed is the word popped (in order, bit-exact), and equivalence with a shift-register
+  reference queue. `pio_sm.v` (any instruction word, any configuration, any FIFO / pin / IRQ state, reset at any time): never pops an
+  empty TX FIFO or pushes into a full RX FIFO, OSR / ISR bit counters never above 32, quiet when disabled / between divided-clock ticks /
+  in a delay slot, pin and direction writes only where the mask says, stall and forced-instruction PC rules, exact delay-slot length,
+  restart state, and the clock divider period (integer dividers below 8.0 only). `formal/check_mutants.py` breaks a copy of the
+  design 28 ways and every harness must reject each one (checked locally). **Not covered formally:** `pio.v` (registers, pin
+  multiplexing, IRQ flags), `mem.v`, the CPU core and the QSPI engine. Details and limits: `formal/README.md`, `CHANGES_oct30_formal.md`.
+- **Constrained-random protocol tests** (`test/test_pio_random.py`, 30 Oct 2026): 64 tests per seed on `pio.v` alone -- UART TX / RX
+  (break frames, +-1.5 % baud error), SPI modes 0-3, I2C master (random clock stretching, wrong address) and PS/2 RX -- each checked
+  against a reference model with bit-timing checks; seeds 1-6 passed locally, and `pio-tests.yaml` runs seeds 1-5 (see
+  `CHANGES_oct30_random_tests.md`).
 - Gate-level tests run on the hardened netlist in CI (first run: 12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job). Feature 20 adds a second post-layout test, the PIO signature test `test_pio_postlayout_signature`. In the gds run of 5-6 Oct 2026 (push `79f0997`, run #65) the gate-level job passed **13/13** on the placed netlist, signature test included: the signature test took 7,564 s (4.40 million simulated clocks) and the smoke test 3,444 s in that run; the `gl_test` job took 3 h 11 min and the whole `gds` workflow 5 h 52 min (`gds` 2 h 40 min, `gl_test` 3 h 11 min, precheck 8 min; the total is about `gds` plus `gl_test`, so precheck overlaps). That is inside GitHub's 360-minute limit per job, but it is a long wait for every push; run times also vary with the hosted machine.
 
 **7. Designed for the synthesis flow, not just for simulation.** The first
@@ -360,6 +379,10 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       `test.yaml` itself runs `make` only); all 12 on-chip cocotb tests + all 31 standalone tests (15 CPU and
       peripheral, 16 PIO) + the 95 PIO protocol cocotb tests currently
       passing in simulation (the workflow's first GitHub run on 4 Oct 2026 passed, 9 min 4 s)
+- [x] **Formal proofs of the PIO FIFO and state machine** (30 Oct 2026): four unbounded SymbiYosys / `abc pdr` proofs in `formal/`
+      (`pio_fifo.v` properties and reference-queue equivalence, `pio_sm.v` properties and clock-divider period), all passing in the
+      manual `formal.yaml` workflow (run #3, push `f03db8d`, 2 min 20 s); 28 mutants of the design all rejected (local run).
+      Not formal: `pio.v`, `mem.v`, the CPU core, the QSPI engine; clock-divider timing only for dividers below 8.0.
 - [ ] **Step 3, in progress (redesigned):** a bitmap font + terminal renderer
       tying the PS/2 keyboard to the ST7789 display, so keystrokes appear on
       screen. The first plan -- interleave the polled PS/2 reader and the
@@ -439,8 +462,16 @@ tools/
   mutation_common.py            shared engine of the mutation sweeps
   sta.py                  quick pre-layout register-to-register timing estimate from a Yosys JSON netlist + liberty file
   build_alu_test.py        standalone program exercising every asm_pineapple.py opcode, for tb_alu_test.v
+formal/
+  run.sh                  four unbounded proofs (about 1 minute); `bash run.sh --mutants` also runs check_mutants.py (about 4 more minutes)
+  fifo_props.vh, pio_fifo_formal.v, pio_fifo.sby   FIFO properties P1-P4 and equivalence with a reference queue
+  sm_props.vh, pio_sm.sby                          state-machine properties S1-S8 (any instruction, configuration and FIFO / pin / IRQ state)
+  instrument.py           writes a COPY of the design in formal/build/ with the properties inserted (src/ is never modified)
+  check_mutants.py        28 deliberately broken copies of the design; every harness must reject each one
+  README.md               what is proven, the limits, the toolchain note
 test/
   tb.v, test.py           cocotb testbench: self-test pass/fail, demo counter, full bootload-and-run
+  test_pio_random.py      64 constrained-random cocotb protocol tests per seed on pio.v (UART, SPI, I2C, PS/2); Makefile.random, PIO_RANDOM_SEED / PIO_RANDOM_N
   test_pio_gl.py          cocotb post-layout smoke test (also runs in the gate-level CI job): PIO echo + pulse programs through the pads; image `pio_gl_smoke_flash_image.hex`
   test_pio_gl_sig.py      cocotb post-layout signature test (feature 20): in / out / mov / jmp / wait forms, side-set PINDIRS, autopush/autopull, input synchroniser and the open-drain pads 8/9, compared with golden values; image `pio_gl_sig_flash_image.hex`
   tb_check.v              standalone: same three scenarios as a single self-contained Icarus testbench
@@ -503,6 +534,22 @@ testbenches and the 120 protocol tests) has its own workflow,
 `.github/workflows/pio-tests.yaml`, which runs on every push and fails on any `FAIL` log or `<failure` in `results.xml`; started by hand with
 `mutation_sweeps` ticked it also runs the mutation sweeps (eight: 1-Wire, VGA, WS2812 repeat, I2C slave, SWD, CAN, gate-level smoke test, gate-level signature test). Its first run on GitHub (4 Oct 2026, push `5de56c9`)
 passed: 76/76 cocotb protocol tests, no failures, every bench log ending in PASS, job time 9 min 1 s (9 min 4 s total). The run after the SWD host was added (feature 19) passed 94/94 cocotb protocol tests (76 + 18 SWD), no failures or errors, and all 33 bench logs ending in PASS, in 4 min 28 s total (push `03013ea`, 4 min 25 s for the job; run time depends on the GitHub-hosted machine the job lands on and has varied between about 4 and 9 minutes). The run after the CAN PIO was added (feature 21, 7 Oct 2026) passed 120/120 cocotb protocol tests (77 + 18 SWD + 25 CAN), no failures or errors, all 34 bench logs ending in PASS (including `tb_pio_cpu_can.v`), in 9 min 35 s (the cocotb run itself took 444 s on that runner).
+
+## Formal verification
+
+```
+cd formal && bash run.sh              # four unbounded proofs, about 1 minute (Yosys, SymbiYosys, yosys-abc; abc pdr engine)
+cd formal && bash run.sh --mutants    # also: all 28 broken copies of the design must be rejected (about 4 more minutes)
+```
+
+Proven for every input sequence: the FIFO invariants and bit-exact in-order data (P1-P4), equivalence of the FIFO with a reference queue,
+and the state-machine rules S1-S7 plus the clock-divider period S8 (integer dividers below 8.0). The workflow `.github/workflows/formal.yaml`
+is manual (`workflow_dispatch`, option `mutants`) and is not part of the Tiny Tapeout flow. Its first successful run on GitHub
+(run #3, 30 Oct 2026, push `f03db8d`, 2 min 20 s, job 2 min 16 s) passed all four proofs (`pio_fifo_props` 4 s, `pio_fifo_equiv` 10 s,
+`pio_sm_core` 1 s, `pio_sm_clkdiv` 20 s, each ending `DONE (PASS, rc=0)`; log artifact `formal-logs`); the only annotation was GitHub's
+Node.js 20 deprecation warning for one of the actions. That run did not include the mutant check. What is **not** proven: `pio.v`,
+`mem.v`, the CPU core and the QSPI engine (covered by the simulation tests above), that a PIO program implements a protocol correctly, and
+clock-divider timing for dividers of 8.0 and above. See `formal/README.md`.
 
 Mutation sweeps (each breaks a PIO program one line at a time on a temporary copy and checks that a test fails; `--list`
 shows the mutants): `tools/i2c_slave_mutation_sweep.py` (29), `tools/onewire_mutation_sweep.py` (23), `tools/vga_mutation_sweep.py` (23),
