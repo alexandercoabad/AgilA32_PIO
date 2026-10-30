@@ -1,0 +1,33 @@
+name: formal
+# Formal proofs of the PIO FIFO and state machine (formal/README.md). Manual only: it is not part of the Tiny Tapeout flow and the
+# normal push workflows do not run it.  NOTE: written without being able to run GitHub Actions here; the proofs themselves were run
+# locally with Yosys 0.33 + SymbiYosys + abc pdr (about 1 minute).  If the setup step fails, `sudo apt-get install yosys` plus SymbiYosys is the fallback.
+on:
+  workflow_dispatch:
+    inputs:
+      mutants:
+        description: "Also run the mutant checks (about 4 more minutes)"
+        type: boolean
+        default: false
+jobs:
+  formal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+      - name: Install the OSS CAD Suite (Yosys, SymbiYosys, abc)
+        uses: YosysHQ/setup-oss-cad-suite@v3
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Formal proofs
+        shell: bash
+        run: |
+          cd formal
+          if [ "${{ inputs.mutants }}" = "true" ]; then ./run.sh --mutants; else ./run.sh; fi
+      - name: Upload logs
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: formal-logs
+          path: formal/build/*.log
