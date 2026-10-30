@@ -24,7 +24,8 @@ jobs:
         shell: bash
         run: |
           cd formal
-          if [ "${{ inputs.mutants }}" = "true" ]; then ./run.sh --mutants; else ./run.sh; fi
+          # bash, not ./run.sh: files uploaded through the GitHub web page lose their executable bit
+          if [ "${{ inputs.mutants }}" = "true" ]; then bash run.sh --mutants; else bash run.sh; fi
       - name: Upload logs
         if: success() || failure()
         uses: actions/upload-artifact@v7
