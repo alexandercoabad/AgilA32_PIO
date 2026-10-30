@@ -16,6 +16,8 @@ abc pdr
 [script]
 {read}
 prep -top {top}
+techmap t:$shiftx t:$shift
+setundef -anyseq
 [files]
 {files}
 """

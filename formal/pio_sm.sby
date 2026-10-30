@@ -17,6 +17,11 @@ abc pdr
 core:   read -formal -D FORMAL pio_sm_props.v
 clkdiv: read -formal -D FORMAL -D CLKDIV -D CLKDIV_SMALL -D CLKDIV_ACC -D CLKDIV_TICK pio_sm_props.v
 prep -top pio_sm
+# side_fld[val_bits] can index past bit 4 (side_count 5 without the enable bit); the result is masked by '!side_en ||', so
+# any value is harmless, but newer Yosys turns that out-of-range $shiftx into constant 'x' and write_aiger refuses it.
+# Lower the shifts and let the free value be an anyseq.
+techmap t:$shiftx t:$shift
+setundef -anyseq
 
 [files]
 build/pio_sm_props.v

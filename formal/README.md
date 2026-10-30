@@ -50,3 +50,11 @@ were too slow for these designs, hence `abc pdr`.
 a counter that is not capped, a delay slot that executes, a stalled instruction that moves the PC, a divider that ticks one clock late, ...). Every harness
 accepts the real design and rejects every broken copy. Two first-draft mutants of the state machine that were *not* rejected were equivalent changes
 (the pop / push flags are only ever set on a completing tick) and were replaced by changes that alter behaviour.
+
+## Toolchain note
+
+`pio_sm.v` indexes `side_fld[val_bits]`, which can point past bit 4 when `side_count` is 5 without the enable bit.  The result is masked
+by `!side_en ||`, so the value never matters, but recent Yosys releases (as shipped in the OSS CAD Suite) turn the out-of-range
+`$shiftx` into a constant `x`, and `write_aiger` then stops with "Design contains 'x' or 'z' bits".  `pio_sm.sby` (and the mutant
+template in `check_mutants.py`) therefore lower the shifts and replace the free value with `$anyseq` right after `prep`
+(`techmap t:$shiftx t:$shift` + `setundef -anyseq`).  `src/pio_sm.v` is unchanged.

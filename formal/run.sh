@@ -10,6 +10,7 @@ mkdir -p build
 python3 instrument.py ../src/pio_fifo.v fifo_props.vh build/pio_fifo_props.v
 python3 instrument.py ../src/pio_sm.v   sm_props.vh   build/pio_sm_props.v
 fail=0
+mutants=${1:-}      # 'set --' below overwrites $1
 for job in "pio_fifo.sby props" "pio_fifo.sby equiv" "pio_sm.sby core" "pio_sm.sby clkdiv"; do
     set -- $job
     if sby -f "$1" "$2" > "build/$(basename $1 .sby)_$2.log" 2>&1; then
@@ -18,7 +19,7 @@ for job in "pio_fifo.sby props" "pio_fifo.sby equiv" "pio_sm.sby core" "pio_sm.s
         echo "FAIL  $1 $2   (see formal/build/$(basename $1 .sby)_$2.log)"; fail=1
     fi
 done
-if [ "${1:-}" = "--mutants" ]; then
+if [ "$mutants" = "--mutants" ]; then
     python3 check_mutants.py || fail=1
 fi
 exit $fail
