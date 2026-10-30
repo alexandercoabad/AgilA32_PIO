@@ -4,8 +4,8 @@ Unbounded proofs (every input sequence, no depth limit) with SymbiYosys and the 
 **not modified**: `instrument.py` writes a copy in `formal/build/` with the property file inserted before `endmodule`, so the
 properties can see internal registers.
 
-    cd formal && ./run.sh              # four proofs, about 1 minute
-    cd formal && ./run.sh --mutants    # also: every harness must reject deliberately broken copies of the design (about 4 minutes)
+    cd formal && bash run.sh              # four proofs, about 1 minute
+    cd formal && bash run.sh --mutants    # also: every harness must reject deliberately broken copies of the design (about 4 minutes)
 
 Tools: Yosys 0.33, SymbiYosys, `yosys-abc` (OSS CAD Suite or Ubuntu 24.04 `yosys` + SymbiYosys). The z3 and boolector SMT engines
 were too slow for these designs, hence `abc pdr`.
