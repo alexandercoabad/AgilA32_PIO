@@ -1,12 +1,12 @@
 name: formal
 # Formal proofs of the PIO FIFO and state machine (formal/README.md). Manual only: it is not part of the Tiny Tapeout flow and the
-# normal push workflows do not run it.  NOTE: written without being able to run GitHub Actions here; the proofs themselves were run
-# locally with Yosys 0.33 + SymbiYosys + abc pdr (about 1 minute).  If the setup step fails, `sudo apt-get install yosys` plus SymbiYosys is the fallback.
+# normal push workflows do not run it.  First successful GitHub run: #3, 30 Oct 2026, push f03db8d, 2 min 20 s, all four proofs PASS
+# with the mutants option ticked (all 28 mutants rejected).  First run locally with Yosys 0.33 + SymbiYosys + abc pdr (about 1 minute).  If the setup step ever fails, `sudo apt-get install yosys` plus SymbiYosys is the fallback.
 on:
   workflow_dispatch:
     inputs:
       mutants:
-        description: "Also run the mutant checks (about 4 more minutes)"
+        description: "Also run the mutant checks (run #3 took 2 min 20 s in total with this ticked)"
         type: boolean
         default: false
 jobs:
