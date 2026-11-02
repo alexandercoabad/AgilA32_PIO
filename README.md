@@ -35,7 +35,7 @@ drive `pio.v` directly (`tb_pio_isa.v`, `tb_pio_uart.v`, `tb_pio_spi.v`, `tb_pio
 **Formal proofs and random tests** (added 30 Oct 2026, no change to `src/`): four unbounded SymbiYosys proofs of the PIO FIFO
 (`pio_fifo.v`) and of one state machine (`pio_sm.v`) in `formal/` -- **all four pass** in the manual GitHub workflow `formal.yaml`
 (run #3, 30 Oct 2026, commit `f03db8d`, 2 min 20 s) -- and 64 constrained-random cocotb protocol tests per seed
-(`test/test_pio_random.py`: UART, SPI, I2C, PS/2). See "Formal verification" below.
+(`test/test_pio_random.py`: UART, SPI, I2C, PS/2; `pio-tests.yaml` run #54: seeds 1-5, 5 x 64 tests passed). See "Formal verification" below.
 
 | Protocol | Runs on | Status | Verified by |
 |---|---|---|---|
@@ -207,8 +207,8 @@ unchanged.
   multiplexing, IRQ flags), `mem.v`, the CPU core and the QSPI engine. Details and limits: `formal/README.md`, `CHANGES_oct30_formal.md`.
 - **Constrained-random protocol tests** (`test/test_pio_random.py`, 30 Oct 2026): 64 tests per seed on `pio.v` alone -- UART TX / RX
   (break frames, +-1.5 % baud error), SPI modes 0-3, I2C master (random clock stretching, wrong address) and PS/2 RX -- each checked
-  against a reference model with bit-timing checks; seeds 1-6 passed locally, and `pio-tests.yaml` runs seeds 1-5 (see
-  `CHANGES_oct30_random_tests.md`).
+  against a reference model with bit-timing checks; seeds 1-6 passed locally, and `pio-tests.yaml` runs seeds 1-5: it passed on GitHub
+  (run #54, push `f5e5942`, 30 Oct 2026, 25 min 11 s; every seed 64/64, no failures) (see `CHANGES_oct30_random_tests.md`).
 - Gate-level tests run on the hardened netlist in CI (first run: 12/12 passing, including the PIO smoke test `test_pio_postlayout_echo_and_pulses`; 2,587 s, about 50 min for the `gl_test` job). Feature 20 adds a second post-layout test, the PIO signature test `test_pio_postlayout_signature`. In the gds run of 5-6 Oct 2026 (push `79f0997`, run #65) the gate-level job passed **13/13** on the placed netlist, signature test included: the signature test took 7,564 s (4.40 million simulated clocks) and the smoke test 3,444 s in that run; the `gl_test` job took 3 h 11 min and the whole `gds` workflow 5 h 52 min (`gds` 2 h 40 min, `gl_test` 3 h 11 min, precheck 8 min; the total is about `gds` plus `gl_test`, so precheck overlaps). That is inside GitHub's 360-minute limit per job, but it is a long wait for every push; run times also vary with the hosted machine.
 
 **7. Designed for the synthesis flow, not just for simulation.** The first

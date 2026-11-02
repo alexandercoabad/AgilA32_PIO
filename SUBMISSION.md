@@ -2,12 +2,12 @@
 
 Deadline: **18 Jan 2027**. Selection is announced in early February 2027, for the March 2027 IHP SG13CMOS5L shuttle.
 This file lists each requirement from the organisers' October 2026 update and where to find the evidence.
-Last updated 13 Oct 2026 (after gds run #90 on the SG13 CMOS5L flow).
+Last updated 3 Nov 2026 (gds run #90 on the SG13 CMOS5L flow; formal run #3 and pio-tests run #54 on 30 Oct 2026).
 
 | Requirement | Where it is | Status |
 |---|---|---|
 | Public repository with RTL | `src/` (RTL), `pio/` (PIO programs) | Done; set the repository to **public** before submitting |
-| Tests | `test/` (cocotb + Icarus benches), `.github/workflows/test.yaml`, `pio-tests.yaml` | Done: 13 on-chip cocotb tests, about 30 Icarus benches (`test/tb_*.v`), 120 directed PIO protocol tests, 64 constrained-random protocol tests per seed, 4 formal proofs (`formal/run.sh`, passing in GitHub run #3 of `formal.yaml`, 30 Oct 2026) (`make -f Makefile.random`, seeds 1-5 in CI) |
+| Tests | `test/` (cocotb + Icarus benches), `.github/workflows/test.yaml`, `pio-tests.yaml` | Done: 13 on-chip cocotb tests, about 30 Icarus benches (`test/tb_*.v`), 120 directed PIO protocol tests, 64 constrained-random protocol tests per seed, `make -f Makefile.random` (seeds 1-5 passed on GitHub in `pio-tests.yaml` run #54, 25 min 11 s), 4 formal proofs plus 28 mutant checks (`formal/run.sh --mutants`; all passed on GitHub in `formal.yaml` run #3, push `f03db8d`, 2 min 20 s) |
 | Passing GDS and precheck from the Tiny Tapeout flow | `.github/workflows/gds.yaml` | Done on the SG13 CMOS5L flow at 8x4 tiles: run #90 (push `16b8345`, branch `try-density58`, 12-13 Oct 2026) succeeded in 9 h 22 min; gds 4 h 34 min, precheck 9/9 (4 h 47 min), gate-level 13/13 (8 min) |
 | Architecture and instruction-set documentation | `README.md`, `docs/info.md`, `docs/AgilA32_Project_Documentation.pdf` (also at the repo root, with a `.docx`) | Done |
 | Assembler / toolchain with example programs | `tools/asm_pineapple.py` (RV32I), `tools/pioasm.py` (PIO), `tools/build_pio_*.py` (one image per protocol), `c/` (C flow and examples) | Done |
