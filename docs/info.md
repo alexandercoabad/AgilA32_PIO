@@ -908,7 +908,7 @@ worst hold slack +0.116 ns (fast corner), no hold violations; 0 Magic DRC, 0 rou
 0 antenna-violating nets. Synthesis, placement and routing came out identical to the 1 MHz run (same 36,601
 cells, same 3,605 hold buffers, same wirelength) because nothing needed repair at the tighter period. Unchanged
 design-rule advisories, not failures: 44 max-slew violations (slow corner only), 258 max-fanout and 1 max-cap
-violations. The gate-level tests (12/12, 2,587 s) run the CPU and boot path plus one PIO smoke test
+violations. **Update, gds run #122 (3 Nov 2026, CMOS5L flow, 8x4, action tag `@ttihp27a`, same RTL and `config.json`):** worst setup slack +20.60 ns in the slow corner (register-to-register limit about 47.5 MHz, roughly 2.0x margin at 24 MHz), +25.27 ns typical, +28.04 ns fast, TNS 0 in every corner; worst hold slack +0.109 ns (fast corner), no hold violations; 0 Magic DRC, 0 routing DRC, 0 LVS errors, 0 antenna-violating nets; advisories 183 max-slew (slow corner; 48 typical, 8 fast), 273 max-fanout and 39 max-cap violations. The gate-level tests (12/12, 2,587 s) run the CPU and boot path plus one PIO smoke test
 (`test_pio_postlayout_echo_and_pulses`: FIFOs, shifter, ISA decode, IRQ flags, clock divider, pin muxing through the pads,
 see feature 18); the other PIO protocol programs and tests have only been simulated on RTL. That smoke test never executes `in`, `out`,
 `set pindirs`, side-set, pin-conditioned `jmp`/`wait`, `out exec`, autopush/autopull or the input synchronisers, and never owns pads 8/9
