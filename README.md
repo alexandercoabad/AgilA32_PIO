@@ -237,11 +237,10 @@ magnetics), and nothing has been measured on silicon yet.
 
 ## Layout
 
-<img width="909" height="507" alt="Screenshot 2026-09-30 at 9 55 39 AM" src="https://github.com/user-attachments/assets/dd35fa5a-1f16-4868-9cc4-c33615c759e6" />
+<img width="1386" height="650" alt="Screenshot 2026-11-03 at 4 14 48 PM" src="https://github.com/user-attachments/assets/669c5a4d-9dbf-4a48-b0f2-e756130f805f" />
 
 
-
-https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/AgilA32_PIO/tinytapeout.oas&pdk=ihp-sg13g2
+https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/AgilA32_PIO/tinytapeout.oas&pdk=ihp-sg13cmos5l
 
 
 
