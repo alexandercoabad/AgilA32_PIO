@@ -3,7 +3,7 @@ FROM mcr.microsoft.com/vscode/devcontainers/base:${VARIANT}
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PDK_ROOT=/home/vscode/ttsetup/pdk
-ENV PDK=ihp-sg13g2
+ENV PDK=ihp-sg13cmos5l
 ARG TT_SUPPORT_TOOLS_BRANCH=main
 
 RUN apt update
@@ -25,5 +25,5 @@ RUN umask 022 && \
     tar zxf - -C /usr/local --strip-components=1 && \
     chmod 755 /usr/local/bin
 
-# Install LibreLane
-RUN /ttsetup/venv/bin/pip install librelane==3.0.0.dev44
+# Install LibreLane (3.1.0.dev4 or newer is required for ihp-sg13cmos5l)
+RUN /ttsetup/venv/bin/pip install librelane==3.1.0.dev4
