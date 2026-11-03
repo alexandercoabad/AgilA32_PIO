@@ -351,6 +351,12 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       (CI run #90, 12-13 Oct 2026): 38,504 cells (excluding fill/tap), 41.8 % utilisation, clean lint, precheck
       9/9, gate-level tests 13/13; `gds` 4 h 34 min, `precheck` 4 h 47 min, `gl_test` 8 min. At 6x4 detailed routing
       did not converge; at density 60 % the precheck found one Metal2 spacing violation (M2.b) -- see `SUBMISSION.md`
+- [x] **Synchronised with the organisers' template of 3 Nov 2026** (`ttihp-verilog-template`, `main`): the `gds.yaml`, `docs.yaml`,
+      `fpga.yaml` and `test.yaml` workflows, `.devcontainer/` (PDK `ihp-sg13cmos5l`, LibreLane 3.1.0.dev4) and `.vscode/` are identical to the
+      template, so the Tiny Tapeout actions now use the tag `@ttihp27a` (earlier runs, including #90, used the transitional tag `@ihp-cmos5l`).
+      `test/Makefile` does the same gate-level job as the template (PDK cell models chosen from `$(PDK)`, UDP file read before the
+      standard-cell file) plus this project's test list. `src/`, `info.yaml` and the hardened design are unchanged. A GDS / precheck /
+      gate-level run on the new tag was started on 3 Nov 2026; its result is not yet recorded here.
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
