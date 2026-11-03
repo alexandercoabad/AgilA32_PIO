@@ -35,7 +35,7 @@ COMPILE_ARGS    += -DFUNCTIONAL
 COMPILE_ARGS    += -DSIM
 # PDK / PDK_ROOT are set by the GL-test action from the GDS run's pdk.json, so this works
 # for both ihp-sg13g2 (libs sg13g2_*) and ihp-sg13cmos5l (libs sg13cmos5l_*).
-PDK ?= ihp-sg13g2
+PDK ?= ihp-sg13cmos5l
 PDK_LIB = $(patsubst ihp-%,%,$(PDK))
 VERILOG_SOURCES += $(PDK_ROOT)/$(PDK)/libs.ref/$(PDK_LIB)_io/verilog/$(PDK_LIB)_io.v
 # The cell models use UDP primitives (ihp_dff_r, ihp_mux2, ihp_mux4, ...) that newer PDK versions keep in a separate
