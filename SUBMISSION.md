@@ -2,13 +2,13 @@
 
 Deadline: **18 Jan 2027**. Selection is announced in early February 2027, for the March 2027 IHP SG13CMOS5L shuttle.
 This file lists each requirement from the organisers' October 2026 update and where to find the evidence.
-Last updated 3 Nov 2026 (gds run #90 on the SG13 CMOS5L flow; formal run #3 and pio-tests run #54 on 30 Oct 2026).
+Last updated 3 Nov 2026 (gds run #122 on the SG13 CMOS5L flow with the organisers' current action tag; earlier run #90; formal run #3 and pio-tests run #54 on 30 Oct 2026).
 
 | Requirement | Where it is | Status |
 |---|---|---|
 | Public repository with RTL | `src/` (RTL), `pio/` (PIO programs) | Done; set the repository to **public** before submitting |
 | Tests | `test/` (cocotb + Icarus benches), `.github/workflows/test.yaml`, `pio-tests.yaml` | Done: 13 on-chip cocotb tests, about 30 Icarus benches (`test/tb_*.v`), 120 directed PIO protocol tests, 64 constrained-random protocol tests per seed, `make -f Makefile.random` (seeds 1-5 passed on GitHub in `pio-tests.yaml` run #54, 25 min 11 s), 4 formal proofs plus 28 mutant checks (`formal/run.sh --mutants`; all passed on GitHub in `formal.yaml` run #3, push `f03db8d`, 2 min 20 s) |
-| Passing GDS and precheck from the Tiny Tapeout flow | `.github/workflows/gds.yaml` | Done on the SG13 CMOS5L flow at 8x4 tiles: run #90 (push `16b8345`, branch `try-density58`, 12-13 Oct 2026) succeeded in 9 h 22 min; gds 4 h 34 min, precheck 9/9 (4 h 47 min), gate-level 13/13 (8 min) |
+| Passing GDS and precheck from the Tiny Tapeout flow | `.github/workflows/gds.yaml` | Done on the SG13 CMOS5L flow at 8x4 tiles. Latest: run #122 (push `ae18615`, `main`, 3 Nov 2026, action tag `@ttihp27a` as in the organisers' template of 3 Nov 2026, same `src/` as #90) succeeded in 5 h 52 min; gds 5 h 0 min, precheck 10/10 (51 min), gate-level 13/13 (13 min); 43,764 cells, 47.9 % utilisation. Earlier: run #90 (push `16b8345`, branch `try-density58`, 12-13 Oct 2026) succeeded in 9 h 22 min; gds 4 h 34 min, precheck 9/9 (4 h 47 min), gate-level 13/13 (8 min) |
 | Architecture and instruction-set documentation | `README.md`, `docs/info.md`, `docs/AgilA32_Project_Documentation.pdf` (also at the repo root, with a `.docx`) | Done |
 | Assembler / toolchain with example programs | `tools/asm_pineapple.py` (RV32I), `tools/pioasm.py` (PIO), `tools/build_pio_*.py` (one image per protocol), `c/` (C flow and examples) | Done |
 | Write-up of the verification approach | Documentation Section 7; `test/README.md` | Done |
@@ -27,8 +27,9 @@ Runs #65 and #79 used the Tiny Tapeout SG13G2 flow at 6x4 tiles. The runs after 
 | #79 (11 Oct 2026, SG13G2 flow, 6x4, QSPI divider set first in the gate-level images) | 2 h 35 min | 11 min | 2 h 46 min |
 | #85/#88 (11-12 Oct 2026, CMOS5L flow, 8x4, density 60 %) | 5 h 47 min / 3 h 49 min | 10 min | precheck 4 h 28 min / 4 h 48 min; precheck failed with one M2.b violation |
 | #90 (12-13 Oct 2026, CMOS5L flow, 8x4, density 58 %) | 4 h 34 min | 8 min | 9 h 22 min; precheck 4 h 47 min, passed 9/9 |
+| #122 (3 Nov 2026, CMOS5L flow, tag `@ttihp27a`, 8x4, density 58 %, same source as #90) | 5 h 0 min | 13 min 23 s | 5 h 52 min; precheck 51 min, passed 10/10; 43,764 cells, 47.9 % utilisation |
 
-The gds job on CMOS5L ranges from 3 h 49 min to 5 h 47 min between runs, so gds plus gl_test leaves a buffer of only about 1 to 2 h under the six-hour limit. Two other layout variants (density 55 %, clock 41 ns) hit the six-hour limit in gds. The precheck is a separate job; its KLayout DRC takes about 4.8 h on the 8x4 die.
+The gds job on CMOS5L ranges from 3 h 49 min to 5 h 47 min between runs (5 h 0 min in run #122), so gds plus gl_test leaves a buffer of only about 1 to 2 h under the six-hour limit. Two other layout variants (density 55 %, clock 41 ns) hit the six-hour limit in gds. The precheck is a separate job; its KLayout DRC takes about 4.8 h on the 8x4 die.
 
 ## Tile size and the CMOS5L flow
 

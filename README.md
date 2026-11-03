@@ -356,7 +356,14 @@ https://gds-viewer.tinytapeout.com/?model=https://alexandercoabad.github.io/Agil
       template, so the Tiny Tapeout actions now use the tag `@ttihp27a` (earlier runs, including #90, used the transitional tag `@ihp-cmos5l`).
       `test/Makefile` does the same gate-level job as the template (PDK cell models chosen from `$(PDK)`, UDP file read before the
       standard-cell file) plus this project's test list. `src/`, `info.yaml` and the hardened design are unchanged. A GDS / precheck /
-      gate-level run on the new tag was started on 3 Nov 2026; its result is not yet recorded here.
+      gate-level run on the new tag passed (**gds run #122**, push `ae18615`, 3 Nov 2026, same `src/` and `config.json` as run #90): success,
+      5 h 51 min 41 s; `gds` 5 h 0 min, `precheck` 51 min 3 s (10/10 checks passed, including KLayout SG13CMOS5L DRC), `gl_test` 13 min 23 s
+      (13/13), `viewer` 17 s. Layout figures differ from run #90 with the newer flow: 43,764 cells (excluding fill/tap) against 38,504,
+      47.9 % utilisation against 41.8 %, wire length 3,373,594 um against 2,478,845 um (3,433 flip-flops in both). The extra cells come from synthesis: the
+      newer flow (LibreLane 3.1.0.dev4 and a newer IHP PDK commit, against 3.1.0.dev3 in run #90) adds about 10,000 buffers (9 in #90),
+      while timing-repair buffers fall from 8,762 to 6,225; the RTL, flip-flop count and `config.json` are unchanged. Setup slack at the
+      slow corner is +20.6 ns (+20.2 ns in #90), hold slack +0.62 ns, 0 DRC / LVS / antenna errors in both runs. The `gds` job is longer than in #90 (5 h 0 min against 4 h 34 min), so its margin under GitHub's six-hour job limit is
+      about 1 h; the precheck is much faster (51 min against 4 h 47 min).
 - [x] **PIO block (protocol emulator)**: two RP2040-compatible PIO state
       machines + shared 32-word instruction memory + FIFOs at
       `PIO_IDX`/`PIO_DATA` (`0xFF`/`0xFE`), pins 0-9 (`uo_out[7:0]`,
